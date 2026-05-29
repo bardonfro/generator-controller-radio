@@ -1,401 +1,65 @@
 // ================================================================
-// GENERATOR CONTROLLER FIRMWARE
-// Stage 2.2 revised — Two-stage confirmation, correct board def, OLED
-// Board: LilyGo T3 V1.6.1 — Select "TTGO LoRa32 V2.1 (1.6.1)"
+// SENSOR TEST SKETCH
+// Reads battery voltage divider (GPIO 34) and ZMPT101B (GPIO 35)
+// Use this to verify sensing circuits before main firmware integration
 // ================================================================
 
-#include <SPI.h>
-#include <LoRa.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#define BATTERY_SENSE_PIN   34
+#define AC_SENSE_PIN        35
+#define SAMPLE_COUNT        100   // Samples for AC RMS calculation
+#define SAMPLE_INTERVAL_US  200   // Microseconds between samples
 
-// ----------------------------------------------------------------
-// PIN CONSTANTS
-// ----------------------------------------------------------------
-#define LORA_SCK      5
-#define LORA_MISO     19
-#define LORA_MOSI     27
-#define LORA_SS       18
-#define LORA_RESET    23
-#define LORA_DIO0     26
+// Voltage divider calibration
+// R1 = 47k, R2 = 10k, ratio = 10/57 = 0.17543
+#define DIVIDER_RATIO       0.17543
+#define VOLTAGE_CAL_OFFSET  0.0   // Adjust after comparing to multimeter
 
-#define RELAY_PIN     13
-
-// ----------------------------------------------------------------
-// VOLTAGE SENSING CONSTANTS
-// ----------------------------------------------------------------
-#define VOLTAGE_SENSING_ENABLED   false
-#define VOLTAGE_SENSE_PIN         34
-#define VOLTAGE_START_THRESHOLD   50.0
-#define GENERATOR_SPINUP_MS       10000
-#define GENERATOR_CONFIRM_MS      15000
-
-// ----------------------------------------------------------------
-// LORA CONSTANTS
-// ----------------------------------------------------------------
-#define LORA_FREQUENCY    915E6
-#define LORA_TX_POWER     17
-#define LORA_BANDWIDTH    125E3
-#define LORA_SPREAD       8
-#define LORA_CODERATE     5
-
-// ----------------------------------------------------------------
-// IDENTITY CONSTANTS
-// ----------------------------------------------------------------
-#define MY_ADDRESS        "CTRL"
-#define SERVER_ADDRESS    "SERV"
-
-// ----------------------------------------------------------------
-// OLED CONSTANTS
-// ----------------------------------------------------------------
-#define OLED_WIDTH        128
-#define OLED_HEIGHT       64
-#define OLED_RESET        -1
-#define OLED_ADDRESS      0x3C
-#define OLED_SDA          21
-#define OLED_SCL          22
-#define OLED_TIMEOUT_MS   3600000UL
-
-Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
-unsigned long oledStartTime = 0;
-bool oledActive = true;
-
-int lastRSSI = 0;
-String lastTX = "none";
-String lastRX = "none";
-
-// ----------------------------------------------------------------
-// GlOBAL VARIABLES
-// ----------------------------------------------------------------
-bool relayState = false;
-unsigned long ctrlTimerEndMs = 0;
-bool ctrlTimerActive = false;
-
-// ----------------------------------------------------------------
-// FORWARD DECLARATIONS
-// ----------------------------------------------------------------
-void checkForLoRaMessage();
-void handleMessage(String message);
-void confirmGeneratorState(bool expectRunning);
-void setRelay(bool state);
-void sendMessage(String message);
-void updateOLED();
-void checkControllerTimer();
-
-// ----------------------------------------------------------------
-// SETUP
-// ----------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
-  Serial.println("Controller booting...");
-
-  Wire.begin(OLED_SDA, OLED_SCL);
-if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
-  Serial.println("WARNING: OLED init failed");
-} else {
-  oledStartTime = millis();
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(20, 28);
-  display.print("GEN CTRL v1.0");
-  display.display();
-  delay(2000);
-  Serial.println("OLED initialized.");
+  Serial.println("Sensor test starting...");
+  Serial.println("Battery sense on GPIO 34");
+  Serial.println("AC sense on GPIO 35");
+  Serial.println("---");
 }
 
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW);
-  Serial.println("Relay initialized - OFF");
-
-  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
-  LoRa.setPins(LORA_SS, LORA_RESET, LORA_DIO0);
-
-  if (!LoRa.begin(LORA_FREQUENCY)) {
-    Serial.println("ERROR: LoRa init failed.");
-    while (true);
-  }
-
-  LoRa.setTxPower(LORA_TX_POWER);
-  LoRa.setSignalBandwidth(LORA_BANDWIDTH);
-  LoRa.setSpreadingFactor(LORA_SPREAD);
-  LoRa.setCodingRate4(LORA_CODERATE);
-
-  Serial.println("LoRa initialized.");
-  Serial.println("Listening for commands...");
-}
-
-// ----------------------------------------------------------------
-// LOOP
-// ----------------------------------------------------------------
 void loop() {
-  checkForLoRaMessage();
-  checkControllerTimer();
-  updateOLED();
-}
+  // ── Battery voltage reading ──────────────────────────────────
+  int rawBattery = analogRead(BATTERY_SENSE_PIN);
+  float pinVoltage = (rawBattery / 4095.0) * 3.3;
+  float batteryVoltage = (pinVoltage / DIVIDER_RATIO) + VOLTAGE_CAL_OFFSET;
 
-// ----------------------------------------------------------------
-// LORA RECEIVE
-// ----------------------------------------------------------------
-void checkForLoRaMessage() {
-  int packetSize = LoRa.parsePacket();
-  if (packetSize == 0) return;
+  // ── AC presence reading — sample and find peak to peak ───────
+  int maxVal = 0;
+  int minVal = 4095;
 
-  String incoming = "";
-  while (LoRa.available()) {
-    incoming += (char)LoRa.read();
+  for (int i = 0; i < SAMPLE_COUNT; i++) {
+    int sample = analogRead(AC_SENSE_PIN);
+    if (sample > maxVal) maxVal = sample;
+    if (sample < minVal) minVal = sample;
+    delayMicroseconds(SAMPLE_INTERVAL_US);
   }
 
-  int rssi = LoRa.packetRssi();
-  Serial.print("Received: ");
-  Serial.print(incoming);
-  Serial.print("  RSSI: ");
-  Serial.println(rssi);
+  int peakToPeak = maxVal - minVal;
+  bool acPresent = peakToPeak > 100;   // Threshold — adjust during calibration
 
-  if (!incoming.startsWith(MY_ADDRESS)) return;
+  // ── Print results ─────────────────────────────────────────────
+  Serial.print("Battery raw: ");
+  Serial.print(rawBattery);
+  Serial.print("  Pin voltage: ");
+  Serial.print(pinVoltage, 3);
+  Serial.print("V  Battery: ");
+  Serial.print(batteryVoltage, 2);
+  Serial.println("V");
 
-  String message = incoming.substring(5);
-  handleMessage(message);
+  Serial.print("AC raw min: ");
+  Serial.print(minVal);
+  Serial.print("  max: ");
+  Serial.print(maxVal);
+  Serial.print("  peak-to-peak: ");
+  Serial.print(peakToPeak);
+  Serial.print("  AC present: ");
+  Serial.println(acPresent ? "YES" : "NO");
 
-  lastRSSI = LoRa.packetRssi();
-  lastRX = message;
-}
-
-// ----------------------------------------------------------------
-// COMMAND HANDLER
-// ----------------------------------------------------------------
-void handleMessage(String message) {
-  Serial.print("Handling: ");
-  Serial.println(message);
-
-  if (message.startsWith("CMD:START")) {
-    // Parse optional timer value from CMD:START:90
-    int timerMinutes = 0;
-    int secondColon = message.indexOf(':', 4);
-    if (secondColon > 0) {
-      timerMinutes = message.substring(secondColon + 1).toInt();
-    }
-
-    setRelay(true);
-    sendMessage("ACK:START");
-
-    // Start independent safety timer if value was provided
-    if (timerMinutes > 0) {
-      // Add 2 minute grace period beyond server timer
-      // so server stop command arrives before controller cuts out
-      ctrlTimerEndMs = millis() + ((timerMinutes + 2) * 60000UL);
-      ctrlTimerActive = true;
-      Serial.print("Safety timer set: ");
-      Serial.print(timerMinutes + 2);
-      Serial.println(" minutes");
-    }
-
-    Serial.println("Relay closed - ACK sent.");
-    confirmGeneratorState(true);
-
-  } else if (message == "CMD:STOP") {
-    ctrlTimerActive = false;
-    ctrlTimerEndMs  = 0;
-    setRelay(false);
-    sendMessage("ACK:STOP");
-    Serial.println("Relay opened - ACK sent.");
-    confirmGeneratorState(false);
-
-  } else {
-    Serial.print("Unknown command: ");
-    Serial.println(message);
-    sendMessage("ERR:UNKNOWN_CMD");
-  }
-}
-
-// ----------------------------------------------------------------
-// POWER CONFIRMATION
-// ----------------------------------------------------------------
-void confirmGeneratorState(bool expectRunning) {
-  if (VOLTAGE_SENSING_ENABLED) {
-    Serial.println("Waiting for voltage confirmation...");
-    unsigned long waitStart = millis();
-    bool confirmed = false;
-
-    while (millis() - waitStart < GENERATOR_CONFIRM_MS) {
-      float reading = analogRead(VOLTAGE_SENSE_PIN);
-      if (expectRunning && reading > VOLTAGE_START_THRESHOLD) {
-        confirmed = true;
-        break;
-      }
-      if (!expectRunning && reading < VOLTAGE_START_THRESHOLD) {
-        confirmed = true;
-        break;
-      }
-      delay(500);
-    }
-
-    if (confirmed) {
-      if (expectRunning) {
-        Serial.println("Power confirmed ON");
-        sendMessage("STATUS:ON");
-      } else {
-        Serial.println("Power confirmed OFF");
-        sendMessage("STATUS:OFF");
-      }
-    } else {
-      if (expectRunning) {
-        Serial.println("ERROR: Generator failed to start");
-        sendMessage("ERR:START_FAILED");
-        setRelay(false);
-      } else {
-        Serial.println("ERROR: Power still present after stop");
-        sendMessage("ERR:STOP_FAILED");
-      }
-    }
-
-  } else {
-    Serial.print("Voltage sensing disabled. Waiting ");
-    Serial.print(GENERATOR_SPINUP_MS / 1000);
-    Serial.println("s for spinup...");
-
-    delay(GENERATOR_SPINUP_MS);
-
-    if (expectRunning) {
-      Serial.println("Relay closed - assuming generator started (unconfirmed)");
-      sendMessage("STATUS:ASSUMED_ON");
-    } else {
-      Serial.println("Relay open - assuming generator stopped (unconfirmed)");
-      sendMessage("STATUS:ASSUMED_OFF");
-    }
-  }
-}
-
-// ----------------------------------------------------------------
-// CHECK TIMER
-// ----------------------------------------------------------------
-void checkControllerTimer() {
-  if (!ctrlTimerActive) return;
-  if (millis() < ctrlTimerEndMs) return;
-
-  ctrlTimerActive = false;
-  ctrlTimerEndMs  = 0;
-
-  Serial.println("Safety timer expired - shutting down relay");
-  setRelay(false);
-
-  // Attempt to notify server but don't depend on it
-  sendMessage("ERR:SAFETY_TIMEOUT");
-  confirmGeneratorState(false);
-}
-
-
-// ----------------------------------------------------------------
-// RELAY CONTROL
-// ----------------------------------------------------------------
-void setRelay(bool state) {
-  relayState = state;
-  digitalWrite(RELAY_PIN, state ? HIGH : LOW);
-  Serial.print("Relay: ");
-  Serial.println(state ? "ON" : "OFF");
-}
-
-// ----------------------------------------------------------------
-// LORA SEND
-// ----------------------------------------------------------------
-void sendMessage(String message) {
-  lastTX = message;
-  String outgoing = String(SERVER_ADDRESS) + ":" + message;
-  LoRa.beginPacket();
-  LoRa.print(outgoing);
-  LoRa.endPacket();
-  Serial.print("Sent: ");
-  Serial.println(outgoing);
-}
-
-// ----------------------------------------------------------------
-// OLED UPDATE
-// ----------------------------------------------------------------
-void updateOLED() {
-  unsigned long elapsed = millis() - oledStartTime;
-
-  if (elapsed >= OLED_TIMEOUT_MS) {
-    if (oledActive) {
-      display.clearDisplay();
-      display.display();
-      oledActive = false;
-    }
-    return;
-  }
-
-  oledActive = true;
-  unsigned long remaining = (OLED_TIMEOUT_MS - elapsed) / 1000;
-  int remH = remaining / 3600;
-  int remM = (remaining % 3600) / 60;
-  int remS = remaining % 60;
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  // Title bar
-  display.fillRect(0, 0, OLED_WIDTH, 10, SSD1306_WHITE);
-  display.setTextColor(SSD1306_BLACK);
-  display.setCursor(28, 1);
-  display.print("GEN CTRL");
-  display.setTextColor(SSD1306_WHITE);
-
-  // LoRa RSSI
-  display.setCursor(0, 12);
-  display.print("RSSI: ");
-  display.print(lastRSSI);
-  display.print(" dBm");
-
-  // Relay state
-  display.setCursor(0, 21);
-  display.print("Relay: ");
-  display.print(relayState ? "ON" : "OFF");
-
-  // System state
-  display.setCursor(0, 30);
-  if (ctrlTimerActive) {
-    unsigned long remaining = (ctrlTimerEndMs - millis()) / 1000;
-    int remM = remaining / 60;
-    int remS = remaining % 60;
-    display.print("Stop in: ");
-    display.print(remM);
-    display.print("m ");
-    if (remS < 10) display.print("0");
-    display.print(remS);
-    display.print("s");
-  } else {
-    display.print("State: ");
-    display.print(relayState ? "RUNNING" : "STOPPED");
-  }
-
-  // Last RX
-  display.setCursor(0, 39);
-  display.print("RX: ");
-  String rxDisplay = lastRX;
-  if (rxDisplay.length() > 16) rxDisplay = rxDisplay.substring(0, 16);
-  display.print(rxDisplay);
-
-  // Last TX
-  display.setCursor(0, 48);
-  display.print("TX: ");
-  String txDisplay = lastTX;
-  if (txDisplay.length() > 16) txDisplay = txDisplay.substring(0, 16);
-  display.print(txDisplay);
-
-  // Countdown timer
-  display.setCursor(0, 57);
-  display.print("Disp: ");
-  if (remH > 0) {
-    display.print(remH);
-    display.print("h ");
-  }
-  if (remM < 10) display.print("0");
-  display.print(remM);
-  display.print("m ");
-  if (remS < 10) display.print("0");
-  display.print(remS);
-  display.print("s");
-
-  display.display();
+  Serial.println("---");
+  delay(1000);
 }
