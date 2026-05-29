@@ -66,9 +66,11 @@ String lastTX = "none";
 String lastRX = "none";
 
 // ----------------------------------------------------------------
-// SYSTEM STATE
+// GlOBAL VARIABLES
 // ----------------------------------------------------------------
 bool relayState = false;
+unsigned long ctrlTimerEndMs = 0;
+bool ctrlTimerActive = false;
 
 // ----------------------------------------------------------------
 // FORWARD DECLARATIONS
@@ -79,6 +81,7 @@ void confirmGeneratorState(bool expectRunning);
 void setRelay(bool state);
 void sendMessage(String message);
 void updateOLED();
+void checkControllerTimer();
 
 // ----------------------------------------------------------------
 // SETUP
@@ -128,6 +131,7 @@ if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
 // ----------------------------------------------------------------
 void loop() {
   checkForLoRaMessage();
+  checkControllerTimer();
   updateOLED();
 }
 
@@ -165,13 +169,34 @@ void handleMessage(String message) {
   Serial.print("Handling: ");
   Serial.println(message);
 
-  if (message == "CMD:START") {
+  if (message.startsWith("CMD:START")) {
+    // Parse optional timer value from CMD:START:90
+    int timerMinutes = 0;
+    int secondColon = message.indexOf(':', 4);
+    if (secondColon > 0) {
+      timerMinutes = message.substring(secondColon + 1).toInt();
+    }
+
     setRelay(true);
     sendMessage("ACK:START");
-    Serial.println("Relay closed - ACK sent. Beginning power confirmation...");
+
+    // Start independent safety timer if value was provided
+    if (timerMinutes > 0) {
+      // Add 2 minute grace period beyond server timer
+      // so server stop command arrives before controller cuts out
+      ctrlTimerEndMs = millis() + ((timerMinutes + 2) * 60000UL);
+      ctrlTimerActive = true;
+      Serial.print("Safety timer set: ");
+      Serial.print(timerMinutes + 2);
+      Serial.println(" minutes");
+    }
+
+    Serial.println("Relay closed - ACK sent.");
     confirmGeneratorState(true);
 
   } else if (message == "CMD:STOP") {
+    ctrlTimerActive = false;
+    ctrlTimerEndMs  = 0;
     setRelay(false);
     sendMessage("ACK:STOP");
     Serial.println("Relay opened - ACK sent.");
@@ -243,6 +268,25 @@ void confirmGeneratorState(bool expectRunning) {
 }
 
 // ----------------------------------------------------------------
+// CHECK TIMER
+// ----------------------------------------------------------------
+void checkControllerTimer() {
+  if (!ctrlTimerActive) return;
+  if (millis() < ctrlTimerEndMs) return;
+
+  ctrlTimerActive = false;
+  ctrlTimerEndMs  = 0;
+
+  Serial.println("Safety timer expired - shutting down relay");
+  setRelay(false);
+
+  // Attempt to notify server but don't depend on it
+  sendMessage("ERR:SAFETY_TIMEOUT");
+  confirmGeneratorState(false);
+}
+
+
+// ----------------------------------------------------------------
 // RELAY CONTROL
 // ----------------------------------------------------------------
 void setRelay(bool state) {
@@ -310,8 +354,20 @@ void updateOLED() {
 
   // System state
   display.setCursor(0, 30);
-  display.print("State: ");
-  display.print(relayState ? "RUNNING" : "STOPPED");
+  if (ctrlTimerActive) {
+    unsigned long remaining = (ctrlTimerEndMs - millis()) / 1000;
+    int remM = remaining / 60;
+    int remS = remaining % 60;
+    display.print("Stop in: ");
+    display.print(remM);
+    display.print("m ");
+    if (remS < 10) display.print("0");
+    display.print(remS);
+    display.print("s");
+  } else {
+    display.print("State: ");
+    display.print(relayState ? "RUNNING" : "STOPPED");
+  }
 
   // Last RX
   display.setCursor(0, 39);

@@ -302,8 +302,17 @@ void setupWebServer() {
 // QUEUE A LORA COMMAND
 // ----------------------------------------------------------------
 void queueCommand(String command) {
-  pendingCommand = command;
-  expectedAck    = "ACK:" + command.substring(4);
+  // For START commands, append the timer value
+  if (command == "CMD:START" && timerActive) {
+    unsigned long remainingMs = timerEndMs - millis();
+    int remainingMinutes = (remainingMs / 60000) + 1; // Round up
+    pendingCommand = "CMD:START:" + String(remainingMinutes);
+  } else {
+    pendingCommand = command;
+  }
+
+  expectedAck    = "ACK:START";
+  if (command == "CMD:STOP") expectedAck = "ACK:STOP";
   sendAttempt    = 0;
   lastSendDone   = false;
   transmitNow();
@@ -446,6 +455,16 @@ void checkForLoRaMessage() {
     systemStatus = "error";
     statusDetail  = "Stop command sent but power still present";
     sendState     = SEND_IDLE;
+    return;
+  }
+
+  if (message == "ERR:SAFETY_TIMEOUT") {
+    systemStatus = "stopped";
+    statusDetail  = "Generator stopped - safety timer expired on controller";
+    sendState     = SEND_IDLE;
+    timerActive   = false;
+    timerEndMs    = 0;
+    Serial.println("Controller safety timer expired");
     return;
   }
 
