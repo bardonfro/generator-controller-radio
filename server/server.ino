@@ -283,6 +283,12 @@ void setupWebServer() {
     doc["status"]  = systemStatus;
     doc["detail"]  = statusDetail;
     doc["pending"] = (sendState != SEND_IDLE);
+
+    doc["timerActive"] = timerActive;
+    doc["timerRemaining"] = timerActive
+    ? (int)((timerEndMs - millis()) / 1000)
+    : 0;
+
     String json;
     serializeJson(doc, json);
     request->send(200, "application/json", json);

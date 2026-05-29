@@ -438,6 +438,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       .then(r => r.json())
       .then(data => {
         updateStatus(data.status, data.detail);
+
+        if (data.timerActive && data.timerRemaining > 0) {
+          // Only restart countdown if we don't already have one running
+          // or if the server's value differs significantly from ours
+          if (!timerInterval || Math.abs(timerRemaining - data.timerRemaining) > 5) {
+            startCountdown(data.timerRemaining);
+          }
+        } else if (!data.timerActive && timerInterval) {
+          clearInterval(timerInterval);
+          timerInterval = null;
+        }
+
         if (data.pending) {
           // Board still processing — stay in pending state
           setPending(true, 'Waiting for controller...');
