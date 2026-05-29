@@ -1,11 +1,14 @@
 // ================================================================
 // GENERATOR CONTROLLER FIRMWARE
-// Stage 2 revised — Two-stage confirmation, correct board def
+// Stage 2.2 revised — Two-stage confirmation, correct board def, OLED
 // Board: LilyGo T3 V1.6.1 — Select "TTGO LoRa32 V2.1 (1.6.1)"
 // ================================================================
 
 #include <SPI.h>
 #include <LoRa.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 // ----------------------------------------------------------------
 // PIN CONSTANTS
@@ -44,6 +47,25 @@
 #define SERVER_ADDRESS    "SERV"
 
 // ----------------------------------------------------------------
+// OLED CONSTANTS
+// ----------------------------------------------------------------
+#define OLED_WIDTH        128
+#define OLED_HEIGHT       64
+#define OLED_RESET        -1
+#define OLED_ADDRESS      0x3C
+#define OLED_SDA          21
+#define OLED_SCL          22
+#define OLED_TIMEOUT_MS   3600000UL
+
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+unsigned long oledStartTime = 0;
+bool oledActive = true;
+
+int lastRSSI = 0;
+String lastTX = "none";
+String lastRX = "none";
+
+// ----------------------------------------------------------------
 // SYSTEM STATE
 // ----------------------------------------------------------------
 bool relayState = false;
@@ -56,6 +78,7 @@ void handleMessage(String message);
 void confirmGeneratorState(bool expectRunning);
 void setRelay(bool state);
 void sendMessage(String message);
+void updateOLED();
 
 // ----------------------------------------------------------------
 // SETUP
@@ -63,6 +86,21 @@ void sendMessage(String message);
 void setup() {
   Serial.begin(115200);
   Serial.println("Controller booting...");
+
+  Wire.begin(OLED_SDA, OLED_SCL);
+if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
+  Serial.println("WARNING: OLED init failed");
+} else {
+  oledStartTime = millis();
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(20, 28);
+  display.print("GEN CTRL v1.0");
+  display.display();
+  delay(2000);
+  Serial.println("OLED initialized.");
+}
 
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
@@ -90,6 +128,7 @@ void setup() {
 // ----------------------------------------------------------------
 void loop() {
   checkForLoRaMessage();
+  updateOLED();
 }
 
 // ----------------------------------------------------------------
@@ -114,6 +153,9 @@ void checkForLoRaMessage() {
 
   String message = incoming.substring(5);
   handleMessage(message);
+
+  lastRSSI = LoRa.packetRssi();
+  lastRX = message;
 }
 
 // ----------------------------------------------------------------
@@ -214,10 +256,90 @@ void setRelay(bool state) {
 // LORA SEND
 // ----------------------------------------------------------------
 void sendMessage(String message) {
+  lastTX = message;
   String outgoing = String(SERVER_ADDRESS) + ":" + message;
   LoRa.beginPacket();
   LoRa.print(outgoing);
   LoRa.endPacket();
   Serial.print("Sent: ");
   Serial.println(outgoing);
+}
+
+// ----------------------------------------------------------------
+// OLED UPDATE
+// ----------------------------------------------------------------
+void updateOLED() {
+  unsigned long elapsed = millis() - oledStartTime;
+
+  if (elapsed >= OLED_TIMEOUT_MS) {
+    if (oledActive) {
+      display.clearDisplay();
+      display.display();
+      oledActive = false;
+    }
+    return;
+  }
+
+  oledActive = true;
+  unsigned long remaining = (OLED_TIMEOUT_MS - elapsed) / 1000;
+  int remH = remaining / 3600;
+  int remM = (remaining % 3600) / 60;
+  int remS = remaining % 60;
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Title bar
+  display.fillRect(0, 0, OLED_WIDTH, 10, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(28, 1);
+  display.print("GEN CTRL");
+  display.setTextColor(SSD1306_WHITE);
+
+  // LoRa RSSI
+  display.setCursor(0, 12);
+  display.print("RSSI: ");
+  display.print(lastRSSI);
+  display.print(" dBm");
+
+  // Relay state
+  display.setCursor(0, 21);
+  display.print("Relay: ");
+  display.print(relayState ? "ON" : "OFF");
+
+  // System state
+  display.setCursor(0, 30);
+  display.print("State: ");
+  display.print(relayState ? "RUNNING" : "STOPPED");
+
+  // Last RX
+  display.setCursor(0, 39);
+  display.print("RX: ");
+  String rxDisplay = lastRX;
+  if (rxDisplay.length() > 16) rxDisplay = rxDisplay.substring(0, 16);
+  display.print(rxDisplay);
+
+  // Last TX
+  display.setCursor(0, 48);
+  display.print("TX: ");
+  String txDisplay = lastTX;
+  if (txDisplay.length() > 16) txDisplay = txDisplay.substring(0, 16);
+  display.print(txDisplay);
+
+  // Countdown timer
+  display.setCursor(0, 57);
+  display.print("Disp: ");
+  if (remH > 0) {
+    display.print(remH);
+    display.print("h ");
+  }
+  if (remM < 10) display.print("0");
+  display.print(remM);
+  display.print("m ");
+  if (remS < 10) display.print("0");
+  display.print(remS);
+  display.print("s");
+
+  display.display();
 }

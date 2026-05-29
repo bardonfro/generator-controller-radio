@@ -1,6 +1,6 @@
 // ================================================================
 // GENERATOR SERVER FIRMWARE
-// Stage 4 — Updated with static IP, mDNS, and corrected init order
+// Stage 4.2 — Updated with static IP, mDNS, and corrected init order, OLED
 // Board: LilyGo T3 V1.6.1
 // ================================================================
 
@@ -10,6 +10,9 @@
 #include <SPI.h>
 #include <LoRa.h>
 #include <ArduinoJson.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include "index.h"
 
 // ----------------------------------------------------------------
@@ -54,11 +57,26 @@ IPAddress dns(172, 17, 0, 1);
 // ----------------------------------------------------------------
 // RELIABILITY CONSTANTS
 // ----------------------------------------------------------------
-#define ACK_TIMEOUT_MS    3000
-#define MAX_RETRIES       3
+#define ACK_TIMEOUT_MS    15000
+#define MAX_RETRIES       2
 
 // ----------------------------------------------------------------
-// Troubleshooting
+// OLED CONSTANTS
+// ----------------------------------------------------------------
+#define OLED_WIDTH        128
+#define OLED_HEIGHT       64
+#define OLED_RESET        -1      // No reset pin on this board
+#define OLED_ADDRESS      0x3C
+#define OLED_SDA          21
+#define OLED_SCL          22
+#define OLED_TIMEOUT_MS   3600000UL  // 60 minutes in milliseconds
+
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+unsigned long oledStartTime = 0;
+bool oledActive = true;
+
+// ----------------------------------------------------------------
+// FORWARD DECLARATIONS
 // ----------------------------------------------------------------
 void setupWiFi();
 void setupLoRa();
@@ -68,6 +86,15 @@ void checkSendTimeout();
 void checkTimer();
 void queueCommand(String command);
 void transmitNow();
+void updateOLED();
+
+// ----------------------------------------------------------------
+// GLOBAL VARIABLES
+// ----------------------------------------------------------------
+
+int lastRSSI = 0;
+String lastTX = "none";
+String lastRX = "none";
 
 // ----------------------------------------------------------------
 // SEND STATE MACHINE
@@ -105,6 +132,22 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Server booting...");
 
+  // Initialize OLED
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
+    Serial.println("WARNING: OLED init failed");
+  } else {
+    oledStartTime = millis();
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(20, 28);
+    display.print("GEN SERVER v1.0");
+    display.display();
+    delay(2000);
+    Serial.println("OLED initialized.");
+}
+
   // WiFi initializes first — before LoRa
   setupWiFi();
   setupLoRa();
@@ -122,6 +165,7 @@ void loop() {
   checkForLoRaMessage();
   checkSendTimeout();
   checkTimer();
+  updateOLED();
 }
 
 // ----------------------------------------------------------------
@@ -263,6 +307,7 @@ void transmitNow() {
   sendAttempt++;
   sendTimestamp = millis();
   sendState     = SEND_WAITING;
+  lastTX = pendingCommand; 
 
   String outgoing = String(CTRL_ADDRESS) + ":" + pendingCommand;
   LoRa.beginPacket();
@@ -321,6 +366,8 @@ void checkForLoRaMessage() {
   if (!incoming.startsWith(MY_ADDRESS)) return;
 
   String message = incoming.substring(5);
+  lastRSSI = LoRa.packetRssi();
+  lastRX = message;
 
   // ACK messages
   if (message == "ACK:START") {
@@ -409,6 +456,87 @@ void checkForLoRaMessage() {
     Serial.print("Controller error: ");
     Serial.println(message);
   }
+}
+
+// ----------------------------------------------------------------
+// OLED UPDATE
+// ----------------------------------------------------------------
+void updateOLED() {
+  unsigned long elapsed = millis() - oledStartTime;
+
+  if (elapsed >= OLED_TIMEOUT_MS) {
+    if (oledActive) {
+      display.clearDisplay();
+      display.display();
+      oledActive = false;
+    }
+    return;
+  }
+
+  oledActive = true;
+  unsigned long remaining = (OLED_TIMEOUT_MS - elapsed) / 1000;
+  int remH = remaining / 3600;
+  int remM = (remaining % 3600) / 60;
+  int remS = remaining % 60;
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Title bar
+  display.fillRect(0, 0, OLED_WIDTH, 10, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(28, 1);
+  display.print("GEN SERVER");
+  display.setTextColor(SSD1306_WHITE);
+
+  // WiFi SSID — truncate to 15 chars
+  display.setCursor(0, 12);
+  display.print("WiFi: ");
+  String ssid = WiFi.SSID();
+  if (ssid.length() > 15) ssid = ssid.substring(0, 15);
+  display.print(ssid);
+
+  // IP address
+  display.setCursor(0, 21);
+  display.print("IP: ");
+  display.print(WiFi.localIP());
+
+  // LoRa RSSI
+  display.setCursor(0, 30);
+  display.print("RSSI: ");
+  display.print(lastRSSI);
+  display.print(" dBm");
+
+  // System state
+  display.setCursor(0, 39);
+  display.print("State: ");
+  String stateDisplay = systemStatus;
+  stateDisplay.toUpperCase();
+  display.print(stateDisplay);
+
+  // Last TX
+  display.setCursor(0, 48);
+  display.print("TX:");
+  String txDisplay = lastTX;
+  if (txDisplay.length() > 15) txDisplay = txDisplay.substring(0, 15);
+  display.print(txDisplay);
+
+  // Countdown timer
+  display.setCursor(0, 57);
+  display.print("Disp: ");
+  if (remH > 0) {
+    display.print(remH);
+    display.print("h ");
+  }
+  if (remM < 10) display.print("0");
+  display.print(remM);
+  display.print("m ");
+  if (remS < 10) display.print("0");
+  display.print(remS);
+  display.print("s");
+
+  display.display();
 }
 
 // ----------------------------------------------------------------
