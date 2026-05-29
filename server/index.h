@@ -1,6 +1,6 @@
 // ================================================================
 // index.h — Web UI for generator server
-// Updated — pending state feedback added
+// Updated with Phase 5 Server
 // ================================================================
 
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
@@ -283,6 +283,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
   </div>
 
+  <div id="battery-display" style="font-size:13px; color:var(--color-text-secondary);
+     padding: 6px 18px 0 18px; margin-bottom: 16px;">
+  Waiting for heartbeat...
+</div>
+
   <!-- Pending banner — hidden until a command is in flight -->
   <div id="pending-banner">
     <div class="spinner"></div>
@@ -433,42 +438,63 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   // ── Status polling ────────────────────────────────────────────
 
-  function pollStatus() {
-    fetch('/status')
-      .then(r => r.json())
-      .then(data => {
-        updateStatus(data.status, data.detail);
+function pollStatus() {
+  fetch('/status')
+    .then(r => r.json())
+    .then(data => {
+      updateStatus(data.status, data.detail);
 
-        if (data.timerActive && data.timerRemaining > 0) {
-          // Only restart countdown if we don't already have one running
-          // or if the server's value differs significantly from ours
-          if (!timerInterval || Math.abs(timerRemaining - data.timerRemaining) > 5) {
-            startCountdown(data.timerRemaining);
-          }
-        } else if (!data.timerActive && timerInterval) {
-          clearInterval(timerInterval);
-          timerInterval = null;
+      // Timer restoration
+      if (data.timerActive && data.timerRemaining > 0) {
+        if (!timerInterval || Math.abs(timerRemaining - data.timerRemaining) > 5) {
+          startCountdown(data.timerRemaining);
         }
+      } else if (!data.timerActive && timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
 
-        if (data.pending) {
-          // Board still processing — stay in pending state
-          setPending(true, 'Waiting for controller...');
+      // Battery voltage display
+      var batDisplay = document.getElementById('battery-display');
+      if (!data.controllerOnline) {
+        batDisplay.textContent = 'Controller offline';
+        batDisplay.style.color = '#ef4444';
+      } else if (data.battery && data.battery > 0) {
+        var batText = 'Battery: ' + data.battery.toFixed(1) + 'V';
+        if (data.battery < 11.5) {
+          batText += ' - CRITICAL';
+          batDisplay.style.color = '#ef4444';
+        } else if (data.battery < 12.0) {
+          batText += ' - LOW';
+          batDisplay.style.color = '#f59e0b';
         } else {
-          // Board is done — clear pending
-          if (isPending) {
-            setPending(false);
-            stopFastPoll();
-            if (data.status === 'error') {
-              addLog('Error — controller did not respond', 'error');
-            } else {
-              addLog('Confirmed: ' + data.status, 'info');
-            }
+          batText += ' - OK';
+          batDisplay.style.color = 'var(--color-text-secondary)';
+        }
+        batDisplay.textContent = batText;
+      } else {
+        batDisplay.textContent = 'Waiting for heartbeat...';
+        batDisplay.style.color = 'var(--color-text-secondary)';
+      }
+
+      // Pending state management
+      if (data.pending) {
+        setPending(true, 'Waiting for controller...');
+      } else {
+        if (isPending) {
+          setPending(false);
+          stopFastPoll();
+          if (data.status === 'error') {
+            addLog('Error - controller did not respond', 'error');
+          } else {
+            addLog('Confirmed: ' + data.status, 'info');
           }
         }
-      })
-      .catch(() => {});
-  }
-
+      }
+    })
+    .catch(() => {});
+}
+    
   // ── Status display ────────────────────────────────────────────
 
   function updateStatus(status, detail) {
