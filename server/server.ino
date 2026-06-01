@@ -28,8 +28,8 @@
 // ----------------------------------------------------------------
 // WIFI CONSTANTS
 // ----------------------------------------------------------------
-const char* WIFI_SSID     = "MAG";
-const char* WIFI_PASSWORD = "SW2qpuYDCX$64ich";
+const char* WIFI_SSID     = "YOUR-WIFI";
+const char* WIFI_PASSWORD = "WIFI-PASSWORD";
 
 // ----------------------------------------------------------------
 // NETWORK CONSTANTS
@@ -433,7 +433,7 @@ void checkForLoRaMessage() {
 
   if (message == "STATUS:OFF") {
     systemStatus = "stopped";
-    statusDetail  = "Stopped - power confirmed";
+    statusDetail  = "Stopped - no power output";
     sendState     = SEND_IDLE;
     return;
   }

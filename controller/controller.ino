@@ -159,6 +159,14 @@ void loop() {
   checkForLoRaMessage();
   checkControllerTimer();
   updateOLED();
+
+  // Heartbeat every 60 seconds
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat >= 60000) {
+    lastHeartbeat = millis();
+    sendHeartbeat();
+  }
+
 }
 
 // ----------------------------------------------------------------
