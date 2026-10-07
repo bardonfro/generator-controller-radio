@@ -15,3 +15,6 @@ Wiring schematic for the controller device and its accessories is in the root fi
 # Firmware
 
 The firmware is flashed to the board using the Arduino IDE.ß
+
+# Disclaimer
+The majority of code generation was by Claude AI.
