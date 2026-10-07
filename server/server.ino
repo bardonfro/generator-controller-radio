@@ -13,7 +13,9 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <esp_task_wdt.h>
 #include "index.h"
+
 
 // ----------------------------------------------------------------
 // PIN CONSTANTS
@@ -28,8 +30,8 @@
 // ----------------------------------------------------------------
 // WIFI CONSTANTS
 // ----------------------------------------------------------------
-const char* WIFI_SSID     = "YOUR-WIFI";
-const char* WIFI_PASSWORD = "WIFI-PASSWORD";
+const char* WIFI_SSID     = "MAG";
+const char* WIFI_PASSWORD = "SW2qpuYDCX$64ich";
 
 // ----------------------------------------------------------------
 // NETWORK CONSTANTS
@@ -156,6 +158,16 @@ void setup() {
   setupLoRa();
   setupWebServer();
 
+  // Enable hardware watchdog
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms     = 30000,  // 30 second timeout
+    .idle_core_mask = 0,      // Don't watch idle cores
+    .trigger_panic  = true    // Restart on timeout
+  };
+  esp_task_wdt_init(&wdt_config);
+  esp_task_wdt_add(NULL);
+  Serial.println("Watchdog timer enabled.");
+
   Serial.println("All systems ready.");
   Serial.print("Browse to http://generator.local or http://");
   Serial.println(WiFi.localIP());
@@ -165,10 +177,12 @@ void setup() {
 // LOOP
 // ----------------------------------------------------------------
 void loop() {
+  esp_task_wdt_reset();    // Feed watchdog — proves loop is running
   checkForLoRaMessage();
   checkSendTimeout();
   checkTimer();
   checkHeartbeatTimeout();
+  checkWiFiHealth();       // Check WiFi every 30 seconds
   updateOLED();
 }
 
@@ -292,6 +306,7 @@ void setupWebServer() {
     doc["battery"]         = lastBatteryVoltage;
     doc["controllerOnline"] = controllerOnline;
     doc["rssi"]            = lastRSSI;
+    doc["uptime"]          = millis() / 1000;
     String json;
     serializeJson(doc, json);
     request->send(200, "application/json", json);
@@ -640,4 +655,57 @@ void updateOLED() {
   display.print("s");
 
   display.display();
+}
+
+// ----------------------------------------------------------------
+// WIFI WATCHDOG
+// Checks WiFi health every 30 seconds and recovers if needed
+// ----------------------------------------------------------------
+void checkWiFiHealth() {
+  static unsigned long lastCheck    = 0;
+  static int reconnectAttempts      = 0;
+
+  if (millis() - lastCheck < 30000) return;
+  lastCheck = millis();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    // WiFi is fine — reset reconnect counter
+    reconnectAttempts = 0;
+    return;
+  }
+
+  // WiFi dropped
+  reconnectAttempts++;
+  Serial.print("WiFi lost - reconnect attempt ");
+  Serial.println(reconnectAttempts);
+
+  WiFi.disconnect();
+  delay(1000);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // Wait up to 10 seconds for reconnection
+  int waited = 0;
+  while (WiFi.status() != WL_CONNECTED && waited < 20) {
+    delay(500);
+    waited++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi reconnected successfully");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    reconnectAttempts = 0;
+    // Restart mDNS after reconnection
+    MDNS.end();
+    MDNS.begin("generator");
+  } else {
+    Serial.print("Reconnection failed - attempt ");
+    Serial.println(reconnectAttempts);
+
+    if (reconnectAttempts >= 3) {
+      Serial.println("Too many failed reconnects - restarting board");
+      delay(1000);
+      ESP.restart();
+    }
+  }
 }

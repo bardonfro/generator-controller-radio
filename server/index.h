@@ -286,7 +286,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div id="battery-display" style="font-size:13px; color:var(--color-text-secondary);
      padding: 6px 18px 0 18px; margin-bottom: 16px;">
   Waiting for heartbeat...
-</div>
+  </div>
+
+  <div id="uptime-display" style="font-size:12px; color:var(--color-text-secondary);
+      padding: 2px 18px 0 18px; margin-bottom: 16px;">
+    Uptime: --
+  </div>
 
   <!-- Pending banner — hidden until a command is in flight -->
   <div id="pending-banner">
@@ -477,6 +482,12 @@ function pollStatus() {
         batDisplay.style.color = 'var(--color-text-secondary)';
       }
 
+      // Uptime display
+      if (data.uptime !== undefined) {
+        document.getElementById('uptime-display').textContent =
+          'Server uptime: ' + formatUptime(data.uptime);
+      }
+
       // Pending state management
       if (data.pending) {
         setPending(true, 'Waiting for controller...');
@@ -521,6 +532,23 @@ function pollStatus() {
     }
 
     if (detail) det.textContent = detail;
+  }
+
+  // -- Format Uptime Counter --------------------------------------
+  function formatUptime(seconds) {
+  var d = Math.floor(seconds / 86400);
+  var h = Math.floor((seconds % 86400) / 3600);
+  var m = Math.floor((seconds % 3600) / 60);
+  var s = seconds % 60;
+  if (d > 0) {
+    return d + 'd ' + h + 'h ' + m + 'm';
+  } else if (h > 0) {
+    return h + 'h ' + m + 'm ' + s + 's';
+  } else if (m > 0) {
+    return m + 'm ' + s + 's';
+  } else {
+    return s + 's';
+  }
   }
 
   // ── Countdown ─────────────────────────────────────────────────
