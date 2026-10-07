@@ -14,6 +14,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <esp_task_wdt.h>
+#include "secrets.h"
 #include "index.h"
 
 
@@ -27,11 +28,6 @@
 #define LORA_RESET    23
 #define LORA_DIO0     26
 
-// ----------------------------------------------------------------
-// WIFI CONSTANTS
-// ----------------------------------------------------------------
-const char* WIFI_SSID     = "MAG";
-const char* WIFI_PASSWORD = "SW2qpuYDCX$64ich";
 
 // ----------------------------------------------------------------
 // NETWORK CONSTANTS
