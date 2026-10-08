@@ -1,6 +1,6 @@
 // ================================================================
 // index.h — Web UI for generator server
-// Updated with Phase 5 Server
+// Complete file — all stages including diagnostics section
 // ================================================================
 
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
@@ -8,10 +8,15 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Generator Control</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -50,7 +55,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-bottom: 16px;
+      margin-bottom: 8px;
       padding: 14px 18px;
       background: #333;
       border-radius: 10px;
@@ -82,6 +87,14 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       margin-top: 2px;
     }
 
+    /* Battery display */
+    #battery-display {
+      font-size: 13px;
+      color: #888;
+      padding: 6px 18px 0 18px;
+      margin-bottom: 16px;
+    }
+
     /* Pending banner */
     #pending-banner {
       display: none;
@@ -96,9 +109,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       color: #f59e0b;
     }
 
-    #pending-banner.visible {
-      display: flex;
-    }
+    #pending-banner.visible { display: flex; }
 
     .spinner {
       width: 14px;
@@ -110,9 +121,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       animation: spin 0.8s linear infinite;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Section labels */
     .section-label {
@@ -235,7 +244,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     #btn-stop:active:not(:disabled) { transform: scale(0.97); }
 
-    /* Disabled state for ALL buttons and input wrap */
     button:disabled,
     .btn-preset:disabled {
       opacity: 0.35;
@@ -243,15 +251,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       transform: none;
     }
 
-    .controls-disabled .custom-input-wrap {
-      opacity: 0.35;
-    }
+    .controls-disabled .custom-input-wrap { opacity: 0.35; }
+    .controls-disabled input { pointer-events: none; }
 
-    .controls-disabled input {
-      pointer-events: none;
-    }
-
-    /* Log */
+    /* Activity log */
     #log {
       background: #111;
       border-radius: 8px;
@@ -268,6 +271,34 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .log-entry.error { color: #f87171; }
     .log-entry.info  { color: #60a5fa; }
     .log-entry.warn  { color: #f59e0b; }
+
+    /* Diagnostics section */
+    .diag-table {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 4px 14px;
+    }
+
+    .diag-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #2a2a2a;
+    }
+
+    .diag-row:last-child { border-bottom: none; }
+
+    .diag-label {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .diag-value {
+      font-size: 13px;
+      color: #f0f0f0;
+      text-align: right;
+    }
   </style>
 </head>
 <body>
@@ -283,17 +314,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
   </div>
 
-  <div id="battery-display" style="font-size:13px; color:var(--color-text-secondary);
-     padding: 6px 18px 0 18px; margin-bottom: 16px;">
-  Waiting for heartbeat...
-  </div>
+  <div id="battery-display">Waiting for heartbeat...</div>
 
-  <div id="uptime-display" style="font-size:12px; color:var(--color-text-secondary);
-      padding: 2px 18px 0 18px; margin-bottom: 16px;">
-    Uptime: --
-  </div>
-
-  <!-- Pending banner — hidden until a command is in flight -->
   <div id="pending-banner">
     <div class="spinner"></div>
     <span id="pending-text">Contacting controller...</span>
@@ -330,6 +352,25 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   <p class="section-label">Activity log</p>
   <div id="log"></div>
+
+  <div style="margin-top: 24px;">
+    <p class="section-label">Diagnostics</p>
+    <div class="diag-table">
+      <div class="diag-row">
+        <span class="diag-label">Server uptime</span>
+        <span class="diag-value" id="diag-uptime">--</span>
+      </div>
+      <div class="diag-row">
+        <span class="diag-label">Last message received</span>
+        <span class="diag-value" id="diag-last-msg">--</span>
+      </div>
+      <div class="diag-row">
+        <span class="diag-label">Signal strength (RSSI)</span>
+        <span class="diag-value" id="diag-rssi">--</span>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -338,7 +379,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   var isPending      = false;
   var MAX_MINUTES    = 360;
 
-  // ── Pending state management ──────────────────────────────────
+  // ── Pending state ─────────────────────────────────────────────
 
   function setPending(on, message) {
     isPending = on;
@@ -381,18 +422,16 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   function doStart(minutes) {
     setPending(true, 'Starting generator...');
-    addLog('Starting — ' + formatDuration(minutes * 60) + ' timer', 'info');
+    addLog('Starting - ' + formatDuration(minutes * 60) + ' timer', 'info');
     fetch('/command?cmd=start&timer=' + minutes)
       .then(r => r.json())
       .then(data => {
         addLog(data.message);
-        // Don't clear pending here — wait for poll to confirm
-        // Poll faster while waiting for confirmation
         startFastPoll();
         startCountdown(minutes * 60);
       })
       .catch(() => {
-        addLog('Network error — board unreachable', 'error');
+        addLog('Network error - board unreachable', 'error');
         setPending(false);
       });
   }
@@ -411,15 +450,14 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         startFastPoll();
       })
       .catch(() => {
-        addLog('Network error — board unreachable', 'error');
+        addLog('Network error - board unreachable', 'error');
         setPending(false);
       });
   }
 
   // ── Fast poll while pending ───────────────────────────────────
-  // Polls every 2 seconds until pending clears, then drops back to 10s
 
-  var fastPollInterval = null;
+  var fastPollInterval   = null;
   var normalPollInterval = null;
 
   function startFastPoll() {
@@ -443,69 +481,106 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   // ── Status polling ────────────────────────────────────────────
 
-function pollStatus() {
-  fetch('/status')
-    .then(r => r.json())
-    .then(data => {
-      updateStatus(data.status, data.detail);
+  function pollStatus() {
+    fetch('/status')
+      .then(r => r.json())
+      .then(data => {
+        updateStatus(data.status, data.detail);
 
-      // Timer restoration
-      if (data.timerActive && data.timerRemaining > 0) {
-        if (!timerInterval || Math.abs(timerRemaining - data.timerRemaining) > 5) {
-          startCountdown(data.timerRemaining);
+        // Timer restoration
+        if (data.timerActive && data.timerRemaining > 0) {
+          if (!timerInterval ||
+              Math.abs(timerRemaining - data.timerRemaining) > 5) {
+            startCountdown(data.timerRemaining);
+          }
+        } else if (!data.timerActive && timerInterval) {
+          clearInterval(timerInterval);
+          timerInterval = null;
         }
-      } else if (!data.timerActive && timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-      }
 
-      // Battery voltage display
-      var batDisplay = document.getElementById('battery-display');
-      if (!data.controllerOnline) {
-        batDisplay.textContent = 'Controller offline';
-        batDisplay.style.color = '#ef4444';
-      } else if (data.battery && data.battery > 0) {
-        var batText = 'Battery: ' + data.battery.toFixed(1) + 'V';
-        if (data.battery < 11.5) {
-          batText += ' - CRITICAL';
+        // Battery display
+        var batDisplay = document.getElementById('battery-display');
+        if (!data.controllerOnline) {
+          batDisplay.textContent = 'Controller offline';
           batDisplay.style.color = '#ef4444';
-        } else if (data.battery < 12.0) {
-          batText += ' - LOW';
-          batDisplay.style.color = '#f59e0b';
-        } else {
-          batText += ' - OK';
-          batDisplay.style.color = 'var(--color-text-secondary)';
-        }
-        batDisplay.textContent = batText;
-      } else {
-        batDisplay.textContent = 'Waiting for heartbeat...';
-        batDisplay.style.color = 'var(--color-text-secondary)';
-      }
-
-      // Uptime display
-      if (data.uptime !== undefined) {
-        document.getElementById('uptime-display').textContent =
-          'Server uptime: ' + formatUptime(data.uptime);
-      }
-
-      // Pending state management
-      if (data.pending) {
-        setPending(true, 'Waiting for controller...');
-      } else {
-        if (isPending) {
-          setPending(false);
-          stopFastPoll();
-          if (data.status === 'error') {
-            addLog('Error - controller did not respond', 'error');
+        } else if (data.battery && data.battery > 0) {
+          var batText = 'Battery: ' + data.battery.toFixed(1) + 'V';
+          if (data.battery < 11.5) {
+            batText += ' - CRITICAL';
+            batDisplay.style.color = '#ef4444';
+          } else if (data.battery < 12.0) {
+            batText += ' - LOW';
+            batDisplay.style.color = '#f59e0b';
           } else {
-            addLog('Confirmed: ' + data.status, 'info');
+            batText += ' - OK';
+            batDisplay.style.color = '#888';
+          }
+          batDisplay.textContent = batText;
+        } else {
+          batDisplay.textContent = 'Waiting for heartbeat...';
+          batDisplay.style.color = '#888';
+        }
+
+        // Pending state
+        if (data.pending) {
+          setPending(true, 'Waiting for controller...');
+        } else {
+          if (isPending) {
+            setPending(false);
+            stopFastPoll();
+            if (data.status === 'error') {
+              addLog('Error - controller did not respond', 'error');
+            } else {
+              addLog('Confirmed: ' + data.status, 'info');
+            }
           }
         }
-      }
-    })
-    .catch(() => {});
-}
-    
+
+        // Diagnostics
+        if (data.uptime !== undefined) {
+          document.getElementById('diag-uptime').textContent =
+            formatUptime(data.uptime);
+        }
+
+        if (data.lastMessageAgo !== undefined) {
+          var el = document.getElementById('diag-last-msg');
+          if (data.lastMessageAgo < 0) {
+            el.textContent = 'None this session';
+            el.style.color = '#888';
+          } else if (data.lastMessageAgo < 120) {
+            el.textContent = formatUptime(data.lastMessageAgo) + ' ago';
+            el.style.color = '#f0f0f0';
+          } else {
+            el.textContent = formatUptime(data.lastMessageAgo) + ' ago';
+            el.style.color = '#f59e0b';
+          }
+        }
+
+        if (data.rssi !== undefined && data.rssi !== 0) {
+          var rssiEl    = document.getElementById('diag-rssi');
+          var rssiText  = data.rssi + ' dBm';
+          var rssiColor = '#f0f0f0';
+          if (data.rssi < -90) {
+            rssiText  += ' (weak)';
+            rssiColor  = '#ef4444';
+          } else if (data.rssi < -75) {
+            rssiText  += ' (fair)';
+            rssiColor  = '#f59e0b';
+          } else {
+            rssiText  += ' (good)';
+            rssiColor  = '#22c55e';
+          }
+          rssiEl.textContent = rssiText;
+          rssiEl.style.color = rssiColor;
+        } else {
+          var rssiEl = document.getElementById('diag-rssi');
+          rssiEl.textContent = 'No signal yet';
+          rssiEl.style.color = '#888';
+        }
+      })
+      .catch(() => {});
+  }
+
   // ── Status display ────────────────────────────────────────────
 
   function updateStatus(status, detail) {
@@ -534,23 +609,6 @@ function pollStatus() {
     if (detail) det.textContent = detail;
   }
 
-  // -- Format Uptime Counter --------------------------------------
-  function formatUptime(seconds) {
-  var d = Math.floor(seconds / 86400);
-  var h = Math.floor((seconds % 86400) / 3600);
-  var m = Math.floor((seconds % 3600) / 60);
-  var s = seconds % 60;
-  if (d > 0) {
-    return d + 'd ' + h + 'h ' + m + 'm';
-  } else if (h > 0) {
-    return h + 'h ' + m + 'm ' + s + 's';
-  } else if (m > 0) {
-    return m + 'm ' + s + 's';
-  } else {
-    return s + 's';
-  }
-  }
-
   // ── Countdown ─────────────────────────────────────────────────
 
   function startCountdown(seconds) {
@@ -563,7 +621,7 @@ function pollStatus() {
       if (timerRemaining <= 0) {
         clearInterval(timerInterval);
         timerInterval = null;
-        addLog('Timer expired — stop command sent', 'warn');
+        addLog('Timer expired - stop command sent', 'warn');
       }
     }, 1000);
   }
@@ -575,6 +633,8 @@ function pollStatus() {
     }
   }
 
+  // ── Formatting helpers ────────────────────────────────────────
+
   function formatDuration(seconds) {
     var h = Math.floor(seconds / 3600);
     var m = Math.floor((seconds % 3600) / 60);
@@ -585,13 +645,24 @@ function pollStatus() {
     return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
   }
 
+  function formatUptime(seconds) {
+    var d = Math.floor(seconds / 86400);
+    var h = Math.floor((seconds % 86400) / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    var s = seconds % 60;
+    if (d > 0) return d + 'd ' + h + 'h ' + m + 'm';
+    if (h > 0) return h + 'h ' + m + 'm ' + s + 's';
+    if (m > 0) return m + 'm ' + s + 's';
+    return s + 's';
+  }
+
   // ── Log ───────────────────────────────────────────────────────
 
   function addLog(msg, type) {
-    var log = document.getElementById('log');
+    var log   = document.getElementById('log');
     var entry = document.createElement('div');
-    var time = new Date().toLocaleTimeString();
-    entry.className = 'log-entry' + (type ? ' ' + type : '');
+    var time  = new Date().toLocaleTimeString();
+    entry.className  = 'log-entry' + (type ? ' ' + type : '');
     entry.textContent = '[' + time + '] ' + msg;
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;
@@ -601,6 +672,7 @@ function pollStatus() {
 
   normalPollInterval = setInterval(pollStatus, 10000);
   addLog('Interface ready', 'info');
+  pollStatus();
 </script>
 </body>
 </html>

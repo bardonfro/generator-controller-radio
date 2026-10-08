@@ -70,6 +70,8 @@ IPAddress dns(172, 17, 0, 1);
 #define OLED_HEIGHT       64
 #define OLED_RESET        -1
 #define OLED_ADDRESS      0x3C
+#undef OLED_SDA
+#undef OLED_SCL
 #define OLED_SDA          21
 #define OLED_SCL          22
 #define OLED_TIMEOUT_MS   3600000UL
@@ -107,6 +109,7 @@ bool          controllerOnline   = false;
 int           lastRSSI           = 0;
 String        lastTX             = "none";
 String        lastRX             = "none";
+unsigned long lastMessageMs = 0;
 
 // ----------------------------------------------------------------
 // WEB SERVER
@@ -303,6 +306,10 @@ void setupWebServer() {
     doc["controllerOnline"] = controllerOnline;
     doc["rssi"]            = lastRSSI;
     doc["uptime"]          = millis() / 1000;
+    doc["lastMessageAgo"] = lastMessageMs > 0
+      ? (int)((millis() - lastMessageMs) / 1000)
+      : -1;   // -1 means no message received yet this session
+    doc["rssi"] = lastRSSI;
     String json;
     serializeJson(doc, json);
     request->send(200, "application/json", json);
