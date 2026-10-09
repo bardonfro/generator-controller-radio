@@ -65,7 +65,7 @@
 // is compiled in.
 // ----------------------------------------------------------------
 #define FW_VERSION        "1.1"
-#define LOCAL_TEST_MODE   0
+#define LOCAL_TEST_MODE   1
 
 // ----------------------------------------------------------------
 // BATTERY WARNING THRESHOLDS
@@ -95,6 +95,8 @@
 #define OLED_HEIGHT       64
 #define OLED_RESET        -1
 #define OLED_ADDRESS      0x3C
+#undef OLED_SDA   // board variant defines different values; use the T3 V1.6.1 pins
+#undef OLED_SCL
 #define OLED_SDA          21
 #define OLED_SCL          22
 #define OLED_TIMEOUT_MS   3600000UL
@@ -716,6 +718,7 @@ void updateOLED() {
   display.print("s");
 
   display.display();
+}
 
 // ================================================================
 // LOCAL TEST MODE (compiled only when LOCAL_TEST_MODE is 1)
@@ -726,7 +729,7 @@ void updateOLED() {
 // Replies are also transmitted over LoRa as usual; a server in range
 // will see them.
 // ================================================================
-#if LOCAL_TEST_MODE
+#if LOCAL_TEST_MODE 
 
 void printLocalTestHelp() {
   Serial.println();
@@ -821,5 +824,3 @@ void checkSerialCommands() {
 }
 
 #endif  // LOCAL_TEST_MODE
-
-}
