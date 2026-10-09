@@ -14,6 +14,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <esp_task_wdt.h>
+#include <esp_system.h>
 #include "secrets.h"
 #include "index.h"
 
@@ -90,7 +91,7 @@ IPAddress dns(172, 17, 0, 1);
 // ----------------------------------------------------------------
 // FIRMWARE VERSION
 // ----------------------------------------------------------------
-#define FW_VERSION        "1.1"
+#define FW_VERSION        "1.1.1"
 
 // ----------------------------------------------------------------
 // HEARTBEAT CONSTANTS
@@ -165,6 +166,7 @@ void checkWiFiHealth();
 void queueCommand(String command);
 void transmitNow();
 void sendBootStatusRequest();
+void printResetReason();
 void restoreStateFromHeartbeat(bool relayOn, bool acOn, long controllerTimerSec);
 void updateOLED();
 
@@ -175,6 +177,7 @@ void setup() {
   Serial.begin(115200);
   Serial.print("Server booting... firmware v");
   Serial.println(FW_VERSION);
+  printResetReason();
 
   // OLED first so we can show boot status
   Wire.begin(OLED_SDA, OLED_SCL);
@@ -228,6 +231,32 @@ void loop() {
   checkHeartbeatTimeout();
   checkWiFiHealth();       // Check WiFi every 30 seconds
   updateOLED();
+}
+
+// ----------------------------------------------------------------
+// RESET REASON (boot diagnostic)
+// Printed at every boot so an unexpected restart can be explained from
+// the Serial log. Note: ESP32 reports power-up, the EN/reset button and
+// the USB serial DTR/RTS toggle (opening the Serial Monitor) all as
+// POWERON. BROWNOUT, PANIC and the WDT values indicate a real fault.
+// ----------------------------------------------------------------
+void printResetReason() {
+  Serial.print("Reset reason: ");
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   Serial.println("POWERON (power-up, reset button or serial monitor connect)"); break;
+    case ESP_RST_EXT:       Serial.println("EXT (external reset pin)"); break;
+    case ESP_RST_SW:        Serial.println("SW (software restart)"); break;
+    case ESP_RST_PANIC:     Serial.println("PANIC (crash)"); break;
+    case ESP_RST_INT_WDT:   Serial.println("INT_WDT (interrupt watchdog)"); break;
+    case ESP_RST_TASK_WDT:  Serial.println("TASK_WDT (task watchdog)"); break;
+    case ESP_RST_WDT:       Serial.println("WDT (other watchdog)"); break;
+    case ESP_RST_DEEPSLEEP: Serial.println("DEEPSLEEP (wake)"); break;
+    case ESP_RST_BROWNOUT:  Serial.println("BROWNOUT (supply voltage dipped)"); break;
+    default:
+      Serial.print("other, code ");
+      Serial.println((int)esp_reset_reason());
+      break;
+  }
 }
 
 // ----------------------------------------------------------------

@@ -208,6 +208,9 @@ Voltage divider and ZMPT101B calibrated and validated on bench. Real voltage sen
 ### Version 1.1 — Review Fixes
 Server-side timer enforcement, two-phase ACK timeout, `lastMessageMs` tracking, boot status request, state restore after server reboot, uncommanded shutdown monitor on the controller, controller safety timer cleared on failed start, WiFi reconnect re-applies static IP, throttled OLED redraws, `FW_VERSION` marker, and controller local test mode. Staged rollout: server flashed and tested first, then controller. Awaiting on-hardware confirmation.
 
+### Version 1.1.1 — Boot Diagnostic
+Both sketches print `Reset reason: ...` on every boot (POWERON, SW, PANIC, watchdog, BROWNOUT), so an unexpected restart can be explained from the Serial log. Opening the Serial Monitor or pressing reset both show as POWERON. Garbled characters briefly seen in the startup Serial output went away and were most likely an Arduino IDE setting (for example the board Revision menu or Serial Monitor baud rate), but this was not proven. If it returns, check the `Reset reason:` line and Tools > Revision, which must be "TTGO LoRa32 V2.1 (1.6.1)".
+
 ### Ongoing — Stability and Polish
 WiFi watchdog and hardware watchdog added. OLED diagnostics on both boards. Boot status reporting. mDNS hostname. Static IP assignment. Uptime display.
 

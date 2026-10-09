@@ -638,6 +638,9 @@ pollStatus();   // Immediate poll on page load
 ### 3. Boot Status Request
 (Resolved in v1.1 - server sends `CTRL:CMD:STATUS` after LoRa init; controller handles `CMD:STATUS` and also sends a boot heartbeat. Needs on-hardware confirmation.)
 
+### Boot diagnostic (v1.1.1)
+Both sketches print `Reset reason: ...` right after the version line at every boot. POWERON also covers the reset button and opening the Serial Monitor. BROWNOUT, PANIC and the WDT values indicate a real fault. Garbled characters that once appeared in the startup output went away and were most likely an Arduino IDE setting (not proven); check Tools > Revision is "TTGO LoRa32 V2.1 (1.6.1)" if they return.
+
 ### 4. Known limitation: controller is deaf while confirming
 `confirmGeneratorState()` blocks for up to 15 seconds after a start or stop, and the controller does not poll LoRa during that time. A STOP sent in that window is not received. Making the controller loop non-blocking is a possible future refactor.
 
@@ -647,18 +650,20 @@ pollStatus();   // Immediate poll on page load
 
 Before considering any build complete, verify:
 
-- [ ] Both sketches compile with zero errors (warnings acceptable)
-- [ ] Server board boots, connects to WiFi at 172.17.0.10, starts mDNS
-- [ ] `http://generator.local` and `http://172.17.0.10` both load the UI
-- [ ] Controller board boots, initializes LoRa, sends boot heartbeat
-- [ ] Server receives boot heartbeat and shows controller online
-- [ ] Battery voltage and AC state display correctly in UI
-- [ ] Preset start buttons show pending state, disable controls
-- [ ] Controller receives CMD:START, closes relay, sends ACK then STATUS
-- [ ] UI clears pending and shows Running after STATUS:ON received
-- [ ] Stop button sends CMD:STOP, controller opens relay, confirms shutdown
-- [ ] Timer countdown visible in status detail; restored on page reload
-- [ ] Controller safety timer fires 2 minutes after server timer would have
+Items marked [x] were confirmed on hardware with v1.1.1 on both boards. Items still [ ] have not been confirmed yet.
+
+- [x] Both sketches compile with zero errors (warnings acceptable)
+- [x] Server board boots, connects to WiFi at 172.17.0.10, starts mDNS
+- [x] `http://generator.local` and `http://172.17.0.10` both load the UI
+- [x] Controller board boots, initializes LoRa, sends boot heartbeat
+- [x] Server receives boot heartbeat and shows controller online
+- [ ] Battery voltage and AC state display correctly in UI (re-check with a real running generator)
+- [x] Preset start buttons show pending state, disable controls
+- [x] Controller receives CMD:START, closes relay, sends ACK then STATUS
+- [x] UI clears pending and shows Running after STATUS:ON received
+- [x] Stop button sends CMD:STOP, controller opens relay, confirms shutdown
+- [x] Timer countdown visible in status detail; restored on page reload
+- [x] Controller safety timer fires 2 minutes after server timer would have
 - [ ] Diagnostics section shows uptime, last message time, RSSI
 - [ ] OLED on both boards shows correct information
 - [ ] OLED goes dark after 60 minutes
@@ -669,26 +674,29 @@ Before considering any build complete, verify:
 The boards are flashed one at a time. Flash the server first and test it with the old controller in LoRa range, then flash the controller and test it at the generator site.
 
 **Phase 1 - server v1.1 (WiFi and LoRa range, v1.0 controller)**
-- [ ] OLED and Serial show firmware v1.1; WiFi at 172.17.0.10; both URLs load the UI
-- [ ] Boot `CMD:STATUS` appears in the Serial log (a v1.0 controller replies `ERR:UNKNOWN_CMD`; expected until the controller is flashed)
-- [ ] `/command?cmd=start` (no timer), `timer=0`, `timer=361` and `cmd=bogus` are rejected (HTTP 400) and nothing is sent over LoRa
-- [ ] `timer=360` is accepted
-- [ ] `lastMessageAgo` is -1 until the first LoRa message, then counts up
-- [ ] A valid start gets ACK then STATUS and clears pending
-- [ ] Failed start (no AC): the true error shows, with no false "no response" flicker
-- [ ] Server reboot while running: no `TMR` field from a v1.0 controller, so state is not restored (expected); from a v1.1 controller see Phase 3
+- [x] OLED and Serial show the firmware version; WiFi at 172.17.0.10; both URLs load the UI
+- [x] Boot `CMD:STATUS` appears in the Serial log (a v1.0 controller replies `ERR:UNKNOWN_CMD`; expected until the controller is flashed)
+- [x] `/command?cmd=start` (no timer), `timer=0`, `timer=361`, `timer=abc` and `cmd=bogus` are rejected (HTTP 400) and nothing is sent over LoRa
+- [x] `timer=360` is accepted
+- [x] `lastMessageAgo` is -1 until the first LoRa message, then counts up
+- [x] A valid start gets ACK then STATUS and clears pending
+- [x] Failed start (no AC): the true error shows, with no false "no response" flicker
+- [ ] Server reboot while running: no `TMR` field from a v1.0 controller, so state is not restored (expected). Not run; now moot since the controller has been flashed, see Phase 3
 
 **Phase 2 - controller v1.1 at the generator site (USB Serial only, `LOCAL_TEST_MODE 1`, start wire disconnected)**
-- [ ] Boot log and OLED show v1.1 and LOCAL TEST MODE; a heartbeat is sent about 2s after boot
+- [ ] Boot log and OLED show the version and LOCAL TEST MODE; a heartbeat is sent about 2s after boot
 - [ ] `SENSE` shows AC and battery readings that track reality; OLED values refresh every 2s
-- [ ] `START` and `RAW CMD:START:361` are rejected with `ERR:INVALID_TIMER` and the relay stays open
-- [ ] `START:2` closes the relay, arms the safety timer (4 minutes), sends ACK then STATUS or `ERR:START_FAILED`
-- [ ] After `ERR:START_FAILED` the safety timer is cleared (`SENSE` shows "not armed")
-- [ ] With relay closed and AC removed for 4s: `ERR:UNCOMMANDED_SHUTDOWN` is sent once
-- [ ] `STOP` opens the relay and confirms shutdown; `STATUS` sends a heartbeat with a `TMR` field
-- [ ] Set `LOCAL_TEST_MODE` back to 0 and reflash before installing
+- [x] `START` (no timer) and `RAW CMD:START:361` are rejected with `ERR:INVALID_TIMER` and the relay stays open
+- [x] `START:2` closes the relay, arms the safety timer (timer + 2 minutes), sends ACK then STATUS or `ERR:START_FAILED`
+- [ ] After `ERR:START_FAILED` the safety timer is cleared (`SENSE` shows "not armed", and no `ERR:SAFETY_TIMEOUT` arrives later) - pending, to be tested in local test mode
+- [x] With relay closed and AC removed for 4s: `ERR:UNCOMMANDED_SHUTDOWN` is sent once
+- [x] `STOP` opens the relay and confirms shutdown; `STATUS` sends a heartbeat with a `TMR` field
+- [x] Set `LOCAL_TEST_MODE` back to 0 and reflash before installing (re-check after any further local test session)
 
-**Phase 3 - both boards v1.1**
-- [ ] Server boot gets a heartbeat reply within seconds and shows controller online
-- [ ] Start with a timer, reboot the server: it restores running state and the countdown from the heartbeat `TMR` field
-- [ ] Restored timer already expired: server queues STOP
+**Phase 3 - both boards v1.1.x**
+- [x] Server boot gets a heartbeat reply within seconds and shows controller online
+- [x] Start with a timer, reboot the server: it restores running state and the countdown from the heartbeat `TMR` field
+- [ ] Restored timer already expired: server queues STOP (not tested)
+- [ ] ACK received but no STATUS confirmation: "acknowledged but did not confirm" error, server timer keeps running (not tested - hard to reproduce, accepted as an edge case)
+
+**Still open outside this plan:** radio range and placement testing (in progress), calibration with a real running generator, and a full start/stop run with the real generator.

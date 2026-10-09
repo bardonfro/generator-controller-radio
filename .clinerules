@@ -239,7 +239,7 @@ The web UI depends on this exact shape. Do not rename or remove fields:
 
 ## Firmware Version and Local Test Mode
 
-Both sketches define FW_VERSION (currently "1.1"), shown on the OLED splash
+Both sketches define FW_VERSION (currently "1.1.1"), shown on the OLED splash
 and the first Serial line so you can tell which firmware each board runs.
 Bump it on any firmware change.
 
