@@ -1,11 +1,10 @@
 # Generator Remote Start System — Cline Rules
-# Place this file in the root of the generator-controller-radio repository.
 
 ## Project Context
 
 This is an Arduino/ESP32 firmware project for a LoRa-based remote generator
 start system. Two LilyGo TTGO LoRa32 T3 V1.6.1 boards communicate over
-915MHz LoRa radio. Read spec.md and summary.md before making any changes.
+915MHz LoRa radio. Read docs/spec.md and docs/summary.md before making any changes.
 
 ---
 
@@ -54,9 +53,6 @@ generator-controller-radio/
 - Always read spec.md before writing or modifying any firmware
 - Always include a forward declaration block at the top of each sketch —
   Arduino IDE requires functions declared before use
-- Always verify index.h ends with exactly )rawliteral"; as the absolute
-  last line with no trailing content — missing this causes "unterminated
-  raw string" compilation error
 - Always use LORA_RESET (not LORA_RST) for GPIO 23
 - Always initialize WiFi before LoRa in server.ino setup()
 - Always call WiFi.mode(WIFI_STA) and WiFi.disconnect() with delay(100)
@@ -67,7 +63,6 @@ generator-controller-radio/
 - Always restart mDNS after WiFi reconnects in the WiFi health watchdog
 - Always use JsonDocument (not StaticJsonDocument)
 - Always use send() (not send_P()) for ESPAsyncWebServer responses
-- Always use plain hyphens in string literals, never em dashes
 - Always add a forward declaration for every function defined after setup()
   and loop()
 
@@ -217,7 +212,6 @@ The web UI depends on this exact shape. Do not rename or remove fields:
 - Pending state: all buttons and inputs must be disabled while a command
   is in flight; a spinner banner must be visible
 - Timer countdown must be restorable from server on page reload
-- index.h must end with )rawliteral"; as the absolute last line
 - No em dashes in any string — use plain hyphens
 - The diagnostics section must show: server uptime, time since last LoRa
   message (amber if > 120s), RSSI with quality label (good/fair/weak)
@@ -228,9 +222,6 @@ The web UI depends on this exact shape. Do not rename or remove fields:
 ## Outstanding Issues to Resolve First
 
 Before making any other changes, verify and fix these three items:
-
-1. index.h truncation — confirm the file ends with )rawliteral"; and
-   compiles without "unterminated raw string" error
 
 2. lastMessageMs tracking — verify these exist in server.ino:
    - Global: unsigned long lastMessageMs = 0;

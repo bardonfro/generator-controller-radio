@@ -577,13 +577,7 @@ pollStatus();   // Immediate poll on page load
 ## Current Outstanding Issues
 
 ### 1. index.h Truncation (Blocking)
-The last attempted full paste of `index.h` produced a compilation error: `unterminated raw string`. The closing `)rawliteral";` was missing or cut off. The agent must produce a complete, verified `index.h` that compiles cleanly. Verify the file ends with exactly:
-
-```
-)rawliteral";
-```
-
-with no content after it.
+(Resolved)
 
 ### 2. lastMessageMs and lastMessageAgo (Likely Missing)
 These were described in conversation but may not have been added to the server sketch. Verify:
