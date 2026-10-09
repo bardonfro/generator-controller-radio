@@ -427,6 +427,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       .then(r => r.json())
       .then(data => {
         addLog(data.message);
+        if (!data.pending) {
+          // Server rejected the command - nothing was sent to the controller
+          setPending(false);
+          return;
+        }
         startFastPoll();
         startCountdown(minutes * 60);
       })
@@ -447,6 +452,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       .then(r => r.json())
       .then(data => {
         addLog(data.message);
+        if (!data.pending) {
+          // Server rejected the command - nothing was sent to the controller
+          setPending(false);
+          return;
+        }
         startFastPoll();
       })
       .catch(() => {
