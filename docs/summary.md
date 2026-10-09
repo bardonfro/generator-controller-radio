@@ -114,11 +114,14 @@ Point-to-point raw LoRa (no Meshtastic). Simple text message protocol with addre
 | Controller → Server | `SERV:STATUS:OFF` | Power confirmed off |
 | Controller → Server | `SERV:STATUS:ASSUMED_ON` | Relay closed, no voltage sensing |
 | Controller → Server | `SERV:STATUS:ASSUMED_OFF` | Relay open, no voltage sensing |
-| Controller → Server | `SERV:HB:RELAY:ON:AC:ON:BAT:12.7` | Heartbeat |
+| Controller → Server | `SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:12.7` | Heartbeat (`TMR` = safety timer seconds left, 0 if none) |
 | Controller → Server | `SERV:ERR:START_FAILED` | No AC detected after start |
 | Controller → Server | `SERV:ERR:STOP_FAILED` | AC still present after stop |
 | Controller → Server | `SERV:ERR:UNCOMMANDED_SHUTDOWN` | AC lost while relay closed |
 | Controller → Server | `SERV:ERR:SAFETY_TIMEOUT` | Controller safety timer expired |
+| Controller → Server | `SERV:ERR:INVALID_TIMER` | Start had a missing or out-of-range timer; relay not closed |
+
+Protocol v1.1 added `ERR:INVALID_TIMER` and the heartbeat `TMR` field. Both are additive: fields are found by search, so v1.0 and v1.1 boards interoperate and can be flashed one at a time.
 
 **LoRa settings:** 915MHz, TX power 17dBm, bandwidth 125kHz, spreading factor 8, coding rate 5. Both boards must use identical settings.
 
@@ -133,7 +136,9 @@ Point-to-point raw LoRa (no Meshtastic). Simple text message protocol with addre
 - Hardware watchdog timer (30 second timeout) for automatic recovery from lockups
 - WiFi health watchdog checks every 30 seconds; attempts reconnection; restarts after 3 failed attempts
 - Non-blocking LoRa ACK state machine (blocking approach caused watchdog conflicts with ESPAsyncWebServer)
-- ACK timeout: 15 seconds, 1 retry (generous to accommodate controller confirmation delay)
+- Two-phase timeout: 15 seconds to receive the ACK (one attempt, no retries); once the ACK arrives, a further 20 seconds (15s confirmation + 5s margin) for the STATUS/ERR. No retransmit after an ACK. If the confirmation never arrives the server shows an error but keeps its auto-stop timer running
+- Rejects any start without a timer of 1-360 minutes (enforced in firmware, not just the UI)
+- On boot sends `CMD:STATUS`; rebuilds running state and the auto-stop countdown from the controller heartbeat after a server reboot (stops the generator if the original timer has already expired)
 - Heartbeat timeout: 2 minutes (2 missed heartbeats = controller offline warning)
 - OLED display: WiFi SSID, IP, RSSI, controller online status, battery voltage, system state, display countdown timer (60 minute timeout)
 
@@ -158,8 +163,11 @@ Point-to-point raw LoRa (no Meshtastic). Simple text message protocol with addre
 - **Shutdown confirmation:** 3 seconds sustained AC-absent within 15 seconds; accommodates slow diesel generator voltage decay
 - **Uncommanded shutdown detection:** monitors AC presence while relay is closed; reports `ERR:UNCOMMANDED_SHUTDOWN` after 4 seconds sustained absence
 - **Independent safety timer:** receives timer value with start command; stops generator 2 minutes after server timer would have expired; protects against server going offline mid-run
-- Heartbeat every 60 seconds: relay state, AC state, battery voltage, warnings
-- Sends heartbeat immediately on boot; responds to `CMD:STATUS` requests
+- Refuses a start with a missing or out-of-range timer (`ERR:INVALID_TIMER`); arms the safety timer before closing the relay; clears it if the start fails
+- Heartbeat every 60 seconds: relay state, AC state, safety timer remaining, battery voltage, warnings
+- Sends heartbeat about 2 seconds after boot; responds to `CMD:STATUS` requests
+- Sense values refresh every 2 seconds; OLED redraws at the same rate
+- **Local test mode:** `LOCAL_TEST_MODE` (default off) accepts commands over USB Serial for testing at the generator site, outside WiFi range. The relay really operates. See `docs/spec.md`
 - OLED display: RSSI, relay state, AC state, battery voltage with warnings, safety timer countdown, last TX/RX messages, display countdown timer (60 minute timeout)
 
 ### Voltage Sensing
@@ -196,6 +204,9 @@ Web UI buttons connected to LoRa command pipeline. Non-blocking ACK state machin
 
 ### Phase 5 — Voltage Sensing and Monitoring
 Voltage divider and ZMPT101B calibrated and validated on bench. Real voltage sensing integrated into controller confirmation logic. Heartbeat system implemented. Uncommanded shutdown detection added. Web UI diagnostics section added.
+
+### Version 1.1 — Review Fixes
+Server-side timer enforcement, two-phase ACK timeout, `lastMessageMs` tracking, boot status request, state restore after server reboot, uncommanded shutdown monitor on the controller, controller safety timer cleared on failed start, WiFi reconnect re-applies static IP, throttled OLED redraws, `FW_VERSION` marker, and controller local test mode. Staged rollout: server flashed and tested first, then controller. Awaiting on-hardware confirmation.
 
 ### Ongoing — Stability and Polish
 WiFi watchdog and hardware watchdog added. OLED diagnostics on both boards. Boot status reporting. mDNS hostname. Static IP assignment. Uptime display.

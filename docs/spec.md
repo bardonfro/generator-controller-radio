@@ -90,14 +90,23 @@ SERV:STATUS:ON:12.7     Controller → Server   AC confirmed present, battery vo
 SERV:STATUS:OFF         Controller → Server   AC confirmed absent
 SERV:STATUS:ASSUMED_ON  Controller → Server   Relay closed, no voltage sensing
 SERV:STATUS:ASSUMED_OFF Controller → Server   Relay open, no voltage sensing
-SERV:HB:RELAY:ON:AC:ON:BAT:12.7          Heartbeat, no warnings
-SERV:HB:RELAY:ON:AC:ON:BAT:11.4:WARN:CRITICAL   Heartbeat with warning
+SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:12.7          Heartbeat, no warnings
+SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:11.4:WARN:CRITICAL   Heartbeat with warning
+SERV:HB:RELAY:OFF:AC:OFF:TMR:0:BAT:12.7           Heartbeat, relay open, no timer
 SERV:ERR:START_FAILED         No AC detected within 15s of start
 SERV:ERR:STOP_FAILED          AC still present 15s after stop
-SERV:ERR:UNCOMMANDED_SHUTDOWN AC lost while relay closed
+SERV:ERR:UNCOMMANDED_SHUTDOWN AC lost for 4s while relay closed
 SERV:ERR:SAFETY_TIMEOUT       Controller safety timer expired
+SERV:ERR:INVALID_TIMER        CMD:START had a missing or out-of-range timer (relay NOT closed)
 SERV:ERR:UNKNOWN_CMD          Unrecognized command received
 ```
+
+**Protocol v1.1 changes (additive):**
+
+- `ERR:INVALID_TIMER` is new. The controller sends it for `CMD:START` with no timer, a non-numeric timer, or a timer outside 1-360. The relay is not touched.
+- Heartbeats gain a `TMR:<seconds>` field before `BAT`. It is the controller safety timer remaining (0 if none armed). A rebooted server uses it to rebuild its countdown and auto-stop timer.
+- Parsers find fields by search (`:TMR:`, `:BAT:`, `:WARN:`), so a v1.1 server tolerates a v1.0 controller (no `TMR`) and a v1.0 server ignores `TMR`. The two boards can be flashed one at a time.
+- Interim note: a v1.0 controller answers the boot `CMD:STATUS` with `ERR:UNKNOWN_CMD`, so a v1.1 server paired with a v1.0 controller may show an error at boot until the next command. This clears once the controller is flashed.
 
 ---
 
@@ -194,17 +203,25 @@ The `/status` response JSON shape:
 The ACK wait is non-blocking. States: `SEND_IDLE`, `SEND_WAITING`.
 
 On command queue:
-- Set `pendingCommand`, `expectedAck`, reset `sendAttempt`
-- For `CMD:START` with active timer: append minutes to command — `CMD:START:90`
+- Set `pendingCommand`, `expectedAck`, reset `sendAttempt` and `ackReceived`
+- For `CMD:START`: the timer is mandatory. If no server timer is active the start is refused and nothing is sent. Otherwise append remaining minutes, rounded up and clamped to 1-`MAX_TIMER_MINUTES` - `CMD:START:90`
 - For `CMD:STOP`: `expectedAck = "ACK:STOP"`
 - Call `transmitNow()`
 
-On each `loop()` pass, `checkSendTimeout()`:
-- If `SEND_WAITING` and elapsed > `ACK_TIMEOUT_MS` (15000): retry or fail
-- `MAX_RETRIES = 1` (one attempt only — generous timeout makes retries unnecessary)
-- On all retries exhausted: set error state, roll back timer if start command failed
+The `/command` handler rejects (HTTP 400, `pending:false`, nothing sent) a `start` whose `timer` is missing, below 1 or above `MAX_TIMER_MINUTES` (360), and any unknown or missing `cmd`.
 
-On incoming message matching `expectedAck`: clear `SEND_IDLE`, update system state.
+**Two-phase timeout.** On each `loop()` pass, `checkSendTimeout()`:
+- Phase 1 (no ACK yet): if `SEND_WAITING` and elapsed > `ACK_TIMEOUT_MS` (15000): retry or fail
+- `MAX_RETRIES = 1` (one attempt only - the generous timeout makes retries unnecessary)
+- On all retries exhausted: set error state "No response from controller", roll back timer if start command failed
+- Phase 2 (ACK received): when the expected `ACK:START`/`ACK:STOP` arrives, set `ackReceived = true` and reset `sendTimestamp`. The server then waits up to `STATUS_TIMEOUT_MS` (`GENERATOR_CONFIRM_MS` 15000 + `CONFIRM_MARGIN_MS` 5000) for the STATUS or ERR confirmation. It never retransmits in this phase.
+- If phase 2 times out: `sendState = SEND_IDLE`, systemStatus = error, detail "Controller acknowledged but did not confirm generator state". The server auto-stop timer is deliberately left running, because the relay is known to be in the commanded state.
+
+Why two phases: the controller's confirmation (up to 15s) starts after it receives the command, so a single 15s clock started at transmit always expired first in the worst case and produced a false "no response" error.
+
+`sendState` returns to `SEND_IDLE` only on a STATUS or ERR message, or on timeout. An ACK never clears it.
+
+The boot `CTRL:CMD:STATUS` request is a plain transmit outside this state machine (nothing is left pending); its expected reply is a heartbeat.
 
 ### Incoming Message Handling
 
@@ -212,8 +229,8 @@ The server handles these incoming messages from the controller. Note that `ACK:S
 
 | Message | Action |
 |---------|--------|
-| `ACK:START` | Update statusDetail to "Relay closed - waiting for generator..." |
-| `ACK:STOP` | Update statusDetail to "Relay opened - confirming shutdown..." |
+| `ACK:START` | If waiting for it: `ackReceived = true`, reset `sendTimestamp`, statusDetail "Relay closed - waiting for generator..." |
+| `ACK:STOP` | If waiting for it: `ackReceived = true`, reset `sendTimestamp`, statusDetail "Relay opened - confirming shutdown..." |
 | `STATUS:ON:x.x` | systemStatus = running, parse battery voltage, sendState = IDLE |
 | `STATUS:OFF` | systemStatus = stopped, sendState = IDLE |
 | `STATUS:ASSUMED_ON` | systemStatus = running (with unconfirmed note), sendState = IDLE |
@@ -222,7 +239,8 @@ The server handles these incoming messages from the controller. Note that `ACK:S
 | `ERR:STOP_FAILED` | systemStatus = error, sendState = IDLE |
 | `ERR:SAFETY_TIMEOUT` | systemStatus = stopped, cancel timer, sendState = IDLE |
 | `ERR:UNCOMMANDED_SHUTDOWN` | systemStatus = error, cancel timer, sendState = IDLE |
-| `HB:...` | Parse relay state, AC state, battery voltage, warning flags; update lastHeartbeatMs; detect uncommanded shutdown if systemStatus is running but AC:OFF reported |
+| `ERR:INVALID_TIMER` | systemStatus = error, cancel timer (relay was not closed), sendState = IDLE |
+| `HB:...` | Parse relay state, AC state, `TMR` (if present), battery voltage, warning flags; update lastHeartbeatMs; call `restoreStateFromHeartbeat()`; detect uncommanded shutdown if systemStatus is running but AC:OFF reported |
 | Any `ERR:*` not listed | systemStatus = error, statusDetail = message |
 
 ### Timer Logic
@@ -230,6 +248,17 @@ The server handles these incoming messages from the controller. Note that `ACK:S
 - `timerEndMs` stored as `millis()` + duration — survives page reloads
 - `checkTimer()` in loop: when expired, queue `CMD:STOP`
 - `timerRemaining` in status response = `(timerEndMs - millis()) / 1000`
+- Maximum timer is `MAX_TIMER_MINUTES` (360), enforced in the web UI, the `/command` handler, `queueCommand()` and the controller
+
+### State Restore After Server Reboot
+
+`lastMessageMs` is set whenever a valid message addressed to the server arrives. After a reboot or watchdog restart the server sends `CTRL:CMD:STATUS` once LoRa is up, and the controller replies with a heartbeat. `restoreStateFromHeartbeat(relayOn, acOn, controllerTimerSec)` acts only while `systemStatus == "unknown"` and no command is in flight:
+
+- Relay open: status = stopped
+- Relay closed and AC on: status = running. Relay closed and AC off: status = error
+- If `TMR > 0` and no server timer is active: restore the server timer as `TMR - SAFETY_TIMER_GRACE*60` seconds, which lines up with the original server timer
+- If that restored value is 0 or less (original timer already expired): queue `CMD:STOP`
+- If the heartbeat has no `TMR` field (v1.0 controller) the timer cannot be restored
 
 ### Heartbeat Timeout
 
@@ -320,11 +349,11 @@ void loop() {
 ### Command Handling
 
 On `CMD:START:nn`:
-1. Parse timer minutes from after second colon
-2. `setRelay(true)`
-3. `sendMessage("ACK:START")`
-4. If timer minutes > 0: set `ctrlTimerEndMs = millis() + ((minutes + 2) * 60000UL)`, `ctrlTimerActive = true`
-5. Call `confirmGeneratorState(true)`
+1. Parse timer minutes from after `CMD:START:`. It must be all digits. A missing, non-numeric, zero or greater-than-`MAX_TIMER_MINUTES` (360) value is rejected: send `ERR:INVALID_TIMER` and return. The relay is not touched and no safety timer is armed.
+2. Set `ctrlTimerEndMs = millis() + ((minutes + SAFETY_TIMER_GRACE) * 60000UL)`, `ctrlTimerActive = true`. This happens BEFORE the relay closes so the relay is never closed without a timer armed.
+3. `setRelay(true)`
+4. `sendMessage("ACK:START")`
+5. Call `confirmGeneratorState(true)`. If it ends in `ERR:START_FAILED` the relay is reopened and the safety timer is cleared (otherwise it would later fire a spurious `ERR:SAFETY_TIMEOUT`).
 
 On `CMD:STOP`:
 1. Clear `ctrlTimerActive` and `ctrlTimerEndMs`
@@ -421,7 +450,7 @@ float readBatteryVoltage() {
 
 ### Uncommanded Shutdown Monitor
 
-Only active when `relayState == true`. Uses direct inline ADC read (NOT `readACPresent()` — avoids shared static variable conflict). After 4 seconds sustained absence: send `ERR:UNCOMMANDED_SHUTDOWN`, update `acPresent = false`.
+`checkForUncommandedShutdown()`, called every `loop()` pass. Only active when `relayState == true` and `VOLTAGE_SENSING_ENABLED`. Uses direct inline ADC read (NOT `readACPresent()` — avoids shared static variable conflict), polled every `UNCOMMANDED_CHECK_INTERVAL_MS` (500). After `UNCOMMANDED_SHUTDOWN_MS` (4000) of sustained absence: send `ERR:UNCOMMANDED_SHUTDOWN` once, update `acPresent = false`. State resets when the relay opens or AC returns. It is not called while `confirmGeneratorState()` is blocking, so start-up spin-up time cannot trigger a false alarm.
 
 ### Controller Safety Timer
 
@@ -430,13 +459,37 @@ Only active when `relayState == true`. Uses direct inline ADC read (NOT `readACP
 ### Heartbeat Format
 
 ```
-SERV:HB:RELAY:ON:AC:ON:BAT:12.7
-SERV:HB:RELAY:OFF:AC:OFF:BAT:12.7
-SERV:HB:RELAY:ON:AC:ON:BAT:11.4:WARN:CRITICAL
-SERV:HB:RELAY:ON:AC:ON:BAT:11.9:WARN:LOW
+SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:12.7
+SERV:HB:RELAY:OFF:AC:OFF:TMR:0:BAT:12.7
+SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:11.4:WARN:CRITICAL
+SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:11.9:WARN:LOW
 ```
 
-Battery voltage formatted to 1 decimal place. Warning appended only when threshold crossed.
+`TMR` is the safety timer seconds remaining (0 if none armed). Battery voltage formatted to 1 decimal place. Warning appended only when threshold crossed.
+
+### Sense Update and Boot Heartbeat
+
+`loop()` refreshes `acPresent` and `batteryVoltage` every `SENSE_UPDATE_INTERVAL` (2000 ms). This keeps the OLED current and keeps `readACPresent()`'s two-reading confirmation fresh, so heartbeats never report a stale AC state. `updateOLED()` redraws at the same interval on both boards.
+
+At boot, after LoRa init the controller waits `BOOT_HEARTBEAT_DELAY_MS` (2000 ms), primes `readACPresent()` with one reading, then calls `sendHeartbeat()`.
+
+### Local Test Mode (controller, generator site)
+
+The generator shed is outside WiFi range, so the controller can be exercised from a laptop over USB with no server. Set `#define LOCAL_TEST_MODE 1` in `controller.ino`, flash, and open the Serial Monitor at 115200 baud with line ending "Newline". When the flag is `0` (the default) none of this code is compiled in.
+
+Commands (case-insensitive) go through `handleMessage()`, the same path a LoRa packet takes:
+
+| Command | Effect |
+|---------|--------|
+| `START:<min>` | Same as `CMD:START:<min>`, for example `START:5` |
+| `START` | Same as `CMD:START` with no timer. Must be rejected with `ERR:INVALID_TIMER` |
+| `STOP` | Same as `CMD:STOP` |
+| `STATUS` | Same as `CMD:STATUS` - sends a heartbeat |
+| `SENSE` | Print AC peak-to-peak vs threshold, battery voltage, relay state, safety timer |
+| `RAW <text>` | Feed any message, for example `RAW CMD:START:361` |
+| `HELP` | List commands |
+
+**The relay really operates and replies are transmitted over LoRa as normal. Disconnect the generator start wire before testing.** The OLED splash and boot log show "LOCAL TEST MODE" when enabled. Set the flag back to `0` and reflash before installing for normal use.
 
 ### OLED Display (Controller)
 
@@ -579,14 +632,14 @@ pollStatus();   // Immediate poll on page load
 ### 1. index.h Truncation (Blocking)
 (Resolved)
 
-### 2. lastMessageMs and lastMessageAgo (Likely Missing)
-These were described in conversation but may not have been added to the server sketch. Verify:
-- `unsigned long lastMessageMs = 0;` exists as a global
-- `lastMessageMs = millis();` is called inside `checkForLoRaMessage()` when a valid message arrives
-- `doc["lastMessageAgo"]` is included in the `/status` handler
+### 2. lastMessageMs and lastMessageAgo
+(Resolved in v1.1 - `lastMessageMs` is set in `checkForLoRaMessage()` after the address check and feeds `lastMessageAgo`. Needs on-hardware confirmation.)
 
-### 3. Boot Status Request (Verify)
-The server should send `CTRL:CMD:STATUS` after LoRa initializes on boot. The controller should handle `CMD:STATUS` by calling `sendHeartbeat()`. Verify both are implemented.
+### 3. Boot Status Request
+(Resolved in v1.1 - server sends `CTRL:CMD:STATUS` after LoRa init; controller handles `CMD:STATUS` and also sends a boot heartbeat. Needs on-hardware confirmation.)
+
+### 4. Known limitation: controller is deaf while confirming
+`confirmGeneratorState()` blocks for up to 15 seconds after a start or stop, and the controller does not poll LoRa during that time. A STOP sent in that window is not received. Making the controller loop non-blocking is a possible future refactor.
 
 ---
 
@@ -610,3 +663,32 @@ Before considering any build complete, verify:
 - [ ] OLED on both boards shows correct information
 - [ ] OLED goes dark after 60 minutes
 - [ ] Heartbeat received every 60 seconds; controller offline warning after 2 missed
+
+### Staged-flash test plan (v1.1)
+
+The boards are flashed one at a time. Flash the server first and test it with the old controller in LoRa range, then flash the controller and test it at the generator site.
+
+**Phase 1 - server v1.1 (WiFi and LoRa range, v1.0 controller)**
+- [ ] OLED and Serial show firmware v1.1; WiFi at 172.17.0.10; both URLs load the UI
+- [ ] Boot `CMD:STATUS` appears in the Serial log (a v1.0 controller replies `ERR:UNKNOWN_CMD`; expected until the controller is flashed)
+- [ ] `/command?cmd=start` (no timer), `timer=0`, `timer=361` and `cmd=bogus` are rejected (HTTP 400) and nothing is sent over LoRa
+- [ ] `timer=360` is accepted
+- [ ] `lastMessageAgo` is -1 until the first LoRa message, then counts up
+- [ ] A valid start gets ACK then STATUS and clears pending
+- [ ] Failed start (no AC): the true error shows, with no false "no response" flicker
+- [ ] Server reboot while running: no `TMR` field from a v1.0 controller, so state is not restored (expected); from a v1.1 controller see Phase 3
+
+**Phase 2 - controller v1.1 at the generator site (USB Serial only, `LOCAL_TEST_MODE 1`, start wire disconnected)**
+- [ ] Boot log and OLED show v1.1 and LOCAL TEST MODE; a heartbeat is sent about 2s after boot
+- [ ] `SENSE` shows AC and battery readings that track reality; OLED values refresh every 2s
+- [ ] `START` and `RAW CMD:START:361` are rejected with `ERR:INVALID_TIMER` and the relay stays open
+- [ ] `START:2` closes the relay, arms the safety timer (4 minutes), sends ACK then STATUS or `ERR:START_FAILED`
+- [ ] After `ERR:START_FAILED` the safety timer is cleared (`SENSE` shows "not armed")
+- [ ] With relay closed and AC removed for 4s: `ERR:UNCOMMANDED_SHUTDOWN` is sent once
+- [ ] `STOP` opens the relay and confirms shutdown; `STATUS` sends a heartbeat with a `TMR` field
+- [ ] Set `LOCAL_TEST_MODE` back to 0 and reflash before installing
+
+**Phase 3 - both boards v1.1**
+- [ ] Server boot gets a heartbeat reply within seconds and shows controller online
+- [ ] Start with a timer, reboot the server: it restores running state and the countdown from the heartbeat `TMR` field
+- [ ] Restored timer already expired: server queues STOP

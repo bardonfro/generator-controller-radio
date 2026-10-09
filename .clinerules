@@ -18,8 +18,10 @@ generator-controller-radio/
     secrets.h.example — Credential template (IS in git)
   controller/
     controller.ino    — Controller board firmware
-  spec.md             — Full coding specification (read this first)
-  summary.md          — Hardware and architecture summary
+  docs/
+    spec.md           — Full coding specification (read this first)
+    summary.md        — Hardware and architecture summary
+  controller-voltageSenseTest/  — Standalone bench sketch, not part of the firmware
   .clinerules         — This file
   .gitignore          — Must contain secrets.h
 
@@ -139,8 +141,11 @@ mDNS:        generator.local
 ## Timing Constants — Do Not Change Without Discussion
 
 ```
-ACK_TIMEOUT_MS          15000   Server waits 15s for controller STATUS
+ACK_TIMEOUT_MS          15000   Server waits 15s for controller ACK (phase 1)
+CONFIRM_MARGIN_MS       5000    Added to GENERATOR_CONFIRM_MS after ACK (phase 2)
+STATUS_TIMEOUT_MS       20000   After ACK, wait for STATUS/ERR (CONFIRM + MARGIN)
 MAX_RETRIES             1       One attempt only
+MAX_TIMER_MINUTES       360     Hard cap on any start timer (server and controller)
 HEARTBEAT_TIMEOUT_MS    120000  2 missed heartbeats = controller offline
 GENERATOR_CONFIRM_MS    15000   Max wait for power confirmation
 SHUTDOWN_SUSTAINED_MS   3000    AC must be absent for 3s to confirm shutdown
@@ -152,11 +157,20 @@ WIFI_MAX_RECONNECTS     3       Reconnect attempts before reboot
 SENSE_UPDATE_INTERVAL   2000    OLED sense refresh rate
 HEARTBEAT_INTERVAL      60000   Controller heartbeat period
 SAFETY_TIMER_GRACE      2       Extra minutes added to controller safety timer
+UNCOMMANDED_SHUTDOWN_MS 4000    AC absent this long with relay closed = report
+BOOT_HEARTBEAT_DELAY_MS 2000    Controller wait after LoRa init before boot heartbeat
 ```
+
+The server and controller must keep GENERATOR_CONFIRM_MS, MAX_TIMER_MINUTES
+and SAFETY_TIMER_GRACE in step - they are defined in both sketches.
 
 ---
 
-## Message Protocol — Do Not Change
+## Message Protocol — Do Not Change Without Discussion
+
+Protocol v1.1 added ERR:INVALID_TIMER and the TMR field in heartbeats
+(both approved, additive and backward compatible so boards can be
+flashed one at a time). Any further change needs discussion first.
 
 All messages are prefixed with destination address. Format:
 
@@ -171,14 +185,18 @@ SERV:STATUS:ON:12.7     AC confirmed present, battery voltage appended
 SERV:STATUS:OFF         AC confirmed absent
 SERV:STATUS:ASSUMED_ON  Relay closed, no voltage sensing hardware
 SERV:STATUS:ASSUMED_OFF Relay open, no voltage sensing hardware
-SERV:HB:RELAY:ON:AC:ON:BAT:12.7              Heartbeat
-SERV:HB:RELAY:ON:AC:ON:BAT:11.4:WARN:CRITICAL  With warning
+SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:12.7              Heartbeat (TMR = safety timer secs left, 0 if none)
+SERV:HB:RELAY:ON:AC:ON:TMR:3240:BAT:11.4:WARN:CRITICAL  With warning
 SERV:ERR:START_FAILED         No AC within 15s of start
 SERV:ERR:STOP_FAILED          AC still present 15s after stop
-SERV:ERR:UNCOMMANDED_SHUTDOWN AC lost while relay closed
+SERV:ERR:UNCOMMANDED_SHUTDOWN AC lost for 4s while relay closed
 SERV:ERR:SAFETY_TIMEOUT       Controller safety timer expired
+SERV:ERR:INVALID_TIMER        Start had missing or out-of-range timer, relay NOT closed
 SERV:ERR:UNKNOWN_CMD          Unrecognized command
 ```
+
+Parsers must find heartbeat fields by search (:TMR:, :BAT:, :WARN:), never
+by fixed position, so a v1.0 board and a v1.1 board stay compatible.
 
 ---
 
@@ -219,17 +237,28 @@ The web UI depends on this exact shape. Do not rename or remove fields:
 
 ---
 
-## Outstanding Issues to Resolve First
+## Firmware Version and Local Test Mode
 
-Before making any other changes, verify and fix these three items:
+Both sketches define FW_VERSION (currently "1.1"), shown on the OLED splash
+and the first Serial line so you can tell which firmware each board runs.
+Bump it on any firmware change.
 
-2. lastMessageMs tracking — verify these exist in server.ino:
-   - Global: unsigned long lastMessageMs = 0;
-   - Updated in checkForLoRaMessage() when a valid message arrives
-   - Included in /status response as lastMessageAgo
+controller.ino has LOCAL_TEST_MODE (default 0). When set to 1 it accepts
+START:<min>, START, STOP, STATUS, SENSE and RAW <text> over USB Serial so the
+controller can be tested at the generator site without WiFi or the server.
+The relay really operates in this mode. It must be 0 in any build that is
+installed. Do not remove it; keep it compiled out when 0. See docs/spec.md.
 
-3. Boot status request — verify server sends CTRL:CMD:STATUS after LoRa
-   init, and controller handles CMD:STATUS by calling sendHeartbeat()
+## Outstanding Issues
+
+The three original outstanding items (index.h truncation, lastMessageMs
+tracking, boot status request) were fixed in v1.1 and are awaiting
+on-hardware confirmation. See docs/spec.md "Current Outstanding Issues"
+and the staged-flash test plan. Known limitation: the controller does not
+poll LoRa while confirmGeneratorState() blocks (up to 15s).
+
+Boards are flashed one at a time (server first, then controller). Keep
+changes backward compatible across firmware versions while that applies.
 
 ---
 
